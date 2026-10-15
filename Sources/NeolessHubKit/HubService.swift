@@ -142,7 +142,8 @@ public final class HubService {
         return HubHealth(version: Self.version,
                          asr: worker?.forDevices ?? HubHealth.ASR(ready: false, model: ASRWorker.defaultModel),
                          chatgpt: polisher.health, device: device.name,
-                         polishTimeout: config.polishOptions.minimumTimeout)
+                         polishTimeout: config.polishOptions.minimumTimeout,
+                         polishModels: PolishModel.all.map(\.id))
     }
 
     // MARK: - Warm-up
@@ -212,6 +213,7 @@ public final class HubService {
                                      about: Origin(appName: request.appName, bundleID: request.bundleID, client: request.client,
                                                    clientVersion: request.clientVersion,
                                                    durationSeconds: request.durationSeconds),
+                                     options: self.config.polishOptions(model: request.polishModel, fastTier: request.fastTier),
                                      timings: HubTimings(), start: start)
         }
     }
@@ -319,13 +321,15 @@ public final class HubService {
                             clientRecordingID: request.clientRecordingID,
                             about: Origin(appName: request.appName, bundleID: request.bundleID, client: request.client,
                                           clientVersion: request.clientVersion, durationSeconds: request.durationSeconds),
+                            options: config.polishOptions(model: request.polishModel, fastTier: request.fastTier),
                             timings: timings, start: start)
     }
 
-    /// Polishes `raw` (or types it as is, with the confirmed corrections), saves it and returns the result.
-    /// An empty `raw` is returned as it is and not saved.
+    /// Polishes `raw` with `options` (or types it as is, with the confirmed corrections), saves it and returns the
+    /// result. An empty `raw` is returned as it is and not saved.
     private func finish(raw: String, recognizer: HubRecognizer, mode: DictationMode, clientRecordingID: UUID,
-                        about: Origin, timings: HubTimings, start: ContinuousClock.Instant) async -> DictationResult {
+                        about: Origin, options: PolishOptions, timings: HubTimings,
+                        start: ContinuousClock.Instant) async -> DictationResult {
         var timings = timings
         var text = raw
         var polished = false
@@ -336,7 +340,7 @@ public final class HubService {
                 do {
                     text = try await polisher.polish(raw, mode: mode, appName: about.appName, vocabulary: words.promptWords,
                                                      corrections: words.promptPairs(for: raw),
-                                                     extras: words.promptExtras(for: raw))
+                                                     extras: words.promptExtras(for: raw), options: options)
                     polished = true
                 } catch {
                     text = words.applyConfirmed(raw)
@@ -354,7 +358,8 @@ public final class HubService {
                                      createdAt: HubJSON.rounded(now()))
         guard !raw.isEmpty else { return result }
         let entry = HubHistoryEntry(result: result, appName: about.appName, bundleID: about.bundleID, client: about.client,
-                                    clientVersion: about.clientVersion, durationSeconds: about.durationSeconds)
+                                    clientVersion: about.clientVersion, durationSeconds: about.durationSeconds,
+                                    polishModel: polished ? options.model : nil)
         return history.add(entry).result
     }
 
@@ -391,22 +396,26 @@ public final class HubService {
 
     /// `POST /v1/dictations/{id}/repolish`. No mode: the dictation's own (原样转写 is polished as 自然整理).
     /// `.raw` turns it back into the original with the confirmed corrections, without ChatGPT. Edited while
-    /// ChatGPT was working: the user's text stays and is returned as it is.
-    public func repolish(id: UUID, mode requested: DictationMode?) async throws -> DictationResult {
+    /// ChatGPT was working: the user's text stays and is returned as it is. `polishModel` and `fastTier`: the
+    /// device's 整理模型 and 快速模式 (`HubConfig.polishOptions(model:fastTier:)`; nil, the hub's own).
+    public func repolish(id: UUID, mode requested: DictationMode?, polishModel: String? = nil,
+                         fastTier: Bool? = nil) async throws -> DictationResult {
         guard let entry = history.entry(id: id) else { throw HubFailure.notFound }
         let mode = requested ?? (entry.result.mode.polishes ? entry.result.mode : .natural)
-        let key = "\(id.uuidString)|\(mode.rawValue)"
+        let options = config.polishOptions(model: polishModel, fastTier: fastTier)
+        // The same dictation, mode and model asked again (a resend) waits for the one running.
+        let key = "\(id.uuidString)|\(mode.rawValue)|\(options.model)|\(options.fastTier)"
         if let job = repolishing[key] { return try await join(job) }
         let job = Task { @MainActor [weak self] () throws -> DictationResult in
             defer { self?.repolishing[key] = nil }
             guard let self else { throw CancellationError() }
-            return try await self.runRepolish(id: id, mode: mode)
+            return try await self.runRepolish(id: id, mode: mode, options: options)
         }
         repolishing[key] = job
         return try await job.value
     }
 
-    private func runRepolish(id: UUID, mode: DictationMode) async throws -> DictationResult {
+    private func runRepolish(id: UUID, mode: DictationMode, options: PolishOptions) async throws -> DictationResult {
         guard let entry = history.entry(id: id) else { throw HubFailure.notFound }
         let raw = entry.result.raw
         let editsBefore = edits[id, default: 0]
@@ -416,7 +425,8 @@ public final class HubService {
             let start = ContinuousClock.now
             do {
                 text = try await polisher.polish(raw, mode: mode, appName: entry.appName, vocabulary: words.promptWords,
-                                                 corrections: words.promptPairs(for: raw), extras: words.promptExtras(for: raw))
+                                                 corrections: words.promptPairs(for: raw), extras: words.promptExtras(for: raw),
+                                                 options: options)
             } catch {
                 HubLog.write("repolish: \(PolishFailure.short(error))")
                 throw HubFailure.polishFailed(error)
@@ -439,6 +449,7 @@ public final class HubService {
         current.result.timings.polishMs = polishMs
         current.result.timings.totalMs = current.result.timings.decodeMs + current.result.timings.asrMs + polishMs
         current.edited = false
+        current.polishModel = mode.polishes ? options.model : nil
         history.update(current)
         // The text is the hub's own again: its edits are compared with this one from now on.
         trackers[id] = nil

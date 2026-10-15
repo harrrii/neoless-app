@@ -19,7 +19,11 @@ final class AppSettings: ObservableObject {
         }
     }
     @Published var microphoneUID: String { didSet { d.set(microphoneUID, forKey: "microphoneUID") } }
+    /// 整理模型 (`PolishModel.all`): what this Mac polishes with, and what it asks the Neo to polish with.
+    /// `PolishModel.recommended` until the user picks one: a registered default, so nothing is stored for it, and a
+    /// later recommendation reaches whoever never chose; a model they did pick stays theirs.
     @Published var model: String { didSet { d.set(model, forKey: "model") } }
+    /// 快速模式: here and, like the model, asked of the Neo.
     @Published var fastTier: Bool { didSet { d.set(fastTier, forKey: "fastTier") } }
     @Published var polishTimeout: Double { didSet { d.set(polishTimeout, forKey: "polishTimeout") } }
     @Published var restoreClipboard: Bool { didSet { d.set(restoreClipboard, forKey: "restoreClipboard") } }
@@ -50,12 +54,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    static let models: [(id: String, title: String)] = [
-        ("gpt-6.1-sol", "GPT-6.1-Sol（推荐）"),
-        ("gpt-6-luna", "GPT-6-Luna（更快）"),
-        ("gpt-5.6-luna", "GPT-5.6-Luna"),
-    ]
-
     static let locales: [(id: String, title: String)] = [
         ("zh-CN", "中文（普通话）"),
         ("en-US", "English (US)"),
@@ -69,7 +67,7 @@ final class AppSettings: ObservableObject {
     private init() {
         d.register(defaults: [
             "mode": DictationMode.natural.rawValue, "trigger": HotkeyTrigger.fn.rawValue, "hotkeyEnabled": true,
-            "localeID": "zh-CN", "microphoneUID": Self.microphoneAuto, "model": "gpt-6.1-sol", "fastTier": true,
+            "localeID": "zh-CN", "microphoneUID": Self.microphoneAuto, "model": PolishModel.recommended, "fastTier": true,
             "polishTimeout": 10.0, "restoreClipboard": true, "keepHistory": true,
             "hudFollowsCaret": false, "liveTranscript": true, "autoStructuredForAI": true,
             "hotkeyStyle": HotkeyStyle.auto.rawValue, "silenceAutoStop": true,
@@ -80,7 +78,7 @@ final class AppSettings: ObservableObject {
         hotkeyEnabled = d.bool(forKey: "hotkeyEnabled")
         localeID = d.string(forKey: "localeID") ?? "zh-CN"
         microphoneUID = d.string(forKey: "microphoneUID") ?? Self.microphoneAuto
-        model = d.string(forKey: "model") ?? "gpt-6.1-sol"
+        model = d.string(forKey: "model") ?? PolishModel.recommended
         fastTier = d.bool(forKey: "fastTier")
         polishTimeout = d.double(forKey: "polishTimeout")
         restoreClipboard = d.bool(forKey: "restoreClipboard")

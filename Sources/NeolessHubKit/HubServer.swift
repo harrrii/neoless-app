@@ -75,7 +75,8 @@ public enum HubServer {
         router.post("/v1/dictations/:id/repolish") { request, context in
             let id = try dictationID(context)
             let body = try await decode(RepolishRequest.self, from: request, emptyAs: RepolishRequest())
-            return try json(await service.repolish(id: id, mode: body.mode))
+            return try json(await service.repolish(id: id, mode: body.mode, polishModel: body.polishModel,
+                                                   fastTier: body.fastTier))
         }
 
         router.post("/v1/dictations/:id/edit") { request, context in

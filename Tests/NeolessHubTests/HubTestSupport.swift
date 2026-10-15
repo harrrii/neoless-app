@@ -162,6 +162,7 @@ final class StubPolisher: HubPolishing {
         let vocabulary: Vocabulary.PromptWords
         let corrections: [CorrectionPair]
         let extras: PolishExtras
+        let options: PolishOptions
     }
 
     var answer: (String, DictationMode) throws -> String = { text, mode in
@@ -174,9 +175,9 @@ final class StubPolisher: HubPolishing {
     func waitForRefresh() async {}
 
     func polish(_ transcript: String, mode: DictationMode, appName: String?, vocabulary: Vocabulary.PromptWords,
-                corrections: [CorrectionPair], extras: PolishExtras) async throws -> String {
+                corrections: [CorrectionPair], extras: PolishExtras, options: PolishOptions) async throws -> String {
         calls.append(Call(transcript: transcript, mode: mode, appName: appName, vocabulary: vocabulary, corrections: corrections,
-                          extras: extras))
+                          extras: extras, options: options))
         if let gate { await gate.wait() }
         return try answer(transcript, mode)
     }

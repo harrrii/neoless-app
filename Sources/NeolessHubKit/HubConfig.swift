@@ -7,6 +7,7 @@ import NeolessCore
 public struct HubConfig: Codable, Equatable, Sendable {
     /// What `GET /v1/sync` tells devices to use while they cannot reach the hub.
     public var autoStructured: Bool
+    /// The model and 快速模式 for a request that does not name its own (`polishOptions(model:fastTier:)`).
     public var model: String
     public var fastTier: Bool
     /// The floor of the length-scaled polish budget (`PolishTimeout.seconds`), as the app's 整理超时.
@@ -32,6 +33,16 @@ public struct HubConfig: Codable, Equatable, Sendable {
     public var polishOptions: PolishOptions {
         let floor = min(max(polishTimeout, PolishTimeout.settingRange.lowerBound), PolishTimeout.settingRange.upperBound)
         return PolishOptions(model: model.isEmpty ? PolishOptions.defaultModel : model, fastTier: fastTier, minimumTimeout: floor)
+    }
+
+    /// What one device's request polishes with: the model it asked for when that is one of `PolishModel.all` (an
+    /// unknown name, from a newer or a broken device, is not sent to ChatGPT), its 快速模式 when it said; the hub's
+    /// own `polishOptions` for whatever it left out. The time limit is always the hub's.
+    public func polishOptions(model asked: String?, fastTier askedFast: Bool?) -> PolishOptions {
+        var options = polishOptions
+        if let asked, PolishModel.isKnown(asked) { options.model = asked }
+        if let askedFast { options.fastTier = askedFast }
+        return options
     }
 
     public var settings: HubSettings { HubSettings(autoStructured: autoStructured) }

@@ -142,7 +142,7 @@ import Testing
         var health = try decode(HubHealth.self, try await hub.send(.get, HubPath.health))
         #expect(health == HubHealth(version: HubService.version, asr: .init(ready: true, model: "Qwen3-ASR-0.6B-4bit"),
                                     chatgpt: .init(ready: true, account: "a***@example.com"), device: "iPhone",
-                                    polishTimeout: 10))
+                                    polishTimeout: 10, polishModels: PolishModel.all.map(\.id)))
         hub.asr.healthAnswer = nil
         hub.polisher.health = HubHealth.ChatGPT(ready: false, problem: HubLoginText.notSignedIn)
         health = try decode(HubHealth.self, try await hub.send(.get, HubPath.health))

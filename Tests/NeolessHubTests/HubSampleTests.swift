@@ -248,14 +248,16 @@ import Testing
             let transcript: String
             let instructions: String
             let appName: String?
+            let options: PolishOptions
         }
 
         var answer: (String) throws -> String = { "整理：" + $0 }
         private(set) var calls: [Call] = []
         private(set) var waited = 0
 
-        func polish(_ transcript: String, instructions: String, appName: String?) async throws -> String {
-            calls.append(Call(transcript: transcript, instructions: instructions, appName: appName))
+        func polish(_ transcript: String, instructions: String, appName: String?,
+                    options: PolishOptions) async throws -> String {
+            calls.append(Call(transcript: transcript, instructions: instructions, appName: appName, options: options))
             return try answer(transcript)
         }
 
@@ -365,8 +367,9 @@ import Testing
         let data = try HubEval.encode([HubEval.Result(id: "s-048", mode: .raw, app: nil, raw: "搜索", output: "搜索", polished: false,
                                                       fallback: nil, ms: 0)])
         let object = try #require((try JSONSerialization.jsonObject(with: data) as? [[String: Any]])?.first)
-        #expect(Set(object.keys) == ["id", "mode", "app", "raw", "output", "polished", "fallback", "ms"])
+        #expect(Set(object.keys) == ["id", "mode", "app", "raw", "output", "polished", "fallback", "ms", "model"])
         #expect(object["fallback"] is NSNull && object["app"] is NSNull && object["mode"] as? String == "raw")
+        #expect(object["model"] is NSNull)
         #expect(try JSONDecoder().decode([HubEval.Result].self, from: data).first?.raw == "搜索")
     }
 

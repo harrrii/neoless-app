@@ -354,8 +354,9 @@ public enum HubCommands {
 
         let stop = InterruptFlag.install()
         defer { InterruptFlag.uninstall() }
-        let (results, stopped) = await HubEval.run(samples, words: words, polisher: polisher, overrides: overrides,
-                                                   progress: { printError($0) }, interrupted: { stop.isSet })
+        let (results, stopped) = await HubEval.run(samples, words: words, polisher: polisher, options: options,
+                                                   overrides: overrides, progress: { printError($0) },
+                                                   interrupted: { stop.isSet })
         // A polish that timed out leaves its refresh running: let it save the rotated token first.
         await polisher.waitForRefresh()
 

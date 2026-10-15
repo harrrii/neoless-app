@@ -212,7 +212,8 @@ final class DictationController: ObservableObject {
                 // An edit of it still waiting would reach the Neo after the new text and replace it there.
                 let waiting = await hubSync?.takeEdit(beforeRepolishing: hubID)
                 do {
-                    let result = try await client.repolish(id: hubID, mode: mode)
+                    let result = try await client.repolish(id: hubID, mode: mode, polishModel: settings.model,
+                                                           fastTier: settings.fastTier)
                     hub?.noteReached(client)
                     // Typed into meanwhile: the user's text stays, and reaches the Neo as their next edit.
                     guard var updated = unchanged() else { return }
@@ -933,11 +934,13 @@ final class DictationController: ObservableObject {
         if take.mode.polishes, session == id { set(.polishing) }
         let handed = early.flatMap { !$0.isEmpty && whole($0) ? $0 : nil }
         // 识别模型: the choice, on a Neo that has both models. Asking for the large one means waiting for it: this
-        // Mac's transcript stays here and the call gets a longer budget (`DictationRequest.asking`).
+        // Mac's transcript stays here and the call gets a longer budget (`DictationRequest.asking`). 整理模型 and
+        // 快速模式 go along, so the Neo polishes as this Mac would (and so does a `/v1/polish` that follows).
         let request = DictationRequest(mode: take.chosenMode, autoStructured: take.autoStructured, appName: take.appName,
                                        bundleID: take.bundleID, locale: settings.localeID,
                                        localTranscript: handed, durationSeconds: duration,
-                                       clientRecordingID: id, client: .mac, clientVersion: AppVersion.current)
+                                       clientRecordingID: id, client: .mac, clientVersion: AppVersion.current,
+                                       polishModel: settings.model, fastTier: settings.fastTier)
             .asking(for: hub?.askedModel)
         // A guard around the client's own budget, should anything in it hang: the budget, and the time a resend
         // after a dropped connection is given on top (`HubTimeouts.resend`).
@@ -1011,7 +1014,8 @@ final class DictationController: ObservableObject {
         if take.mode.polishes, session == id { set(.polishing) }
         let request = PolishRequest(text: text, mode: take.chosenMode, autoStructured: take.autoStructured,
                                     appName: take.appName, bundleID: take.bundleID, clientRecordingID: id, client: .mac,
-                                    clientVersion: AppVersion.current, durationSeconds: duration)
+                                    clientVersion: AppVersion.current, durationSeconds: duration,
+                                    polishModel: settings.model, fastTier: settings.fastTier)
         let timeouts = client.timeouts
         let budget = timeouts.polish(characters: text.count) + timeouts.resend(bytes: 0) + 5
         let result: DictationResult

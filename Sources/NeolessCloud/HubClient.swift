@@ -357,10 +357,12 @@ public final class HubClient: Sendable {
                             repeatable: true, slow: true))
     }
 
-    /// `POST /v1/dictations/{id}/repolish`, in `mode` or the dictation's own.
-    public func repolish(id: UUID, mode: DictationMode? = nil) async throws -> DictationResult {
-        try await send(json("POST", HubPath.repolish(id), RepolishRequest(mode: mode), budget: timeouts.polish(characters: nil),
-                            repeatable: true, slow: true))
+    /// `POST /v1/dictations/{id}/repolish`, in `mode` or the dictation's own, with the device's 整理模型 and 快速模式
+    /// (nil: the hub's own).
+    public func repolish(id: UUID, mode: DictationMode? = nil, polishModel: String? = nil,
+                         fastTier: Bool? = nil) async throws -> DictationResult {
+        try await send(json("POST", HubPath.repolish(id), RepolishRequest(mode: mode, polishModel: polishModel, fastTier: fastTier),
+                            budget: timeouts.polish(characters: nil), repeatable: true, slow: true))
     }
 
     /// `POST /v1/dictations/{id}/edit`: the text after the user changed it; the hub learns from the change, unless

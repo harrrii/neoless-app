@@ -2761,7 +2761,7 @@ struct SettingsView: View {
     @State private var testResult: String?
     @State private var testing = false
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
-    /// ChatGPT 整理 › 高级 (model, fast mode, waiting time, test): folded until asked for.
+    /// ChatGPT 整理 › 高级 (fast mode, waiting time, test): folded until asked for.
     @State private var showAdvanced = SettingsView.advancedOpen
 
     /// Snapshots only: render 高级 open.
@@ -3088,9 +3088,18 @@ struct SettingsView: View {
                 SettingRow(title: "登录信息", detail: message)
             }
             RowDivider()
+            // Out of 高级: the one choice here that changes every dictation, the Neo's polishing included (each
+            // request names it), once the Neo's hub reads it: until then the line says the Neo uses its own.
+            SettingRow(title: "整理模型", detail: hub.polishSupport.modelDetail(settings.model)) {
+                Picker("", selection: $settings.model) {
+                    ForEach(PolishModel.all) { Text($0.title).tag($0.id) }
+                }
+                .settingsPopUp()
+            }
+            RowDivider()
             // Rarely changed: one row until opened.
             Button { withAnimation(.easeInOut(duration: 0.2)) { showAdvanced.toggle() } } label: {
-                SettingRow(title: "高级", detail: showAdvanced ? nil : "模型、快速模式、等待时间、测试整理") {
+                SettingRow(title: "高级", detail: showAdvanced ? nil : "快速模式、等待时间、测试整理") {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -3101,14 +3110,7 @@ struct SettingsView: View {
             .buttonStyle(.plain)
             if showAdvanced {
                 RowDivider()
-                SettingRow(title: "模型") {
-                    Picker("", selection: $settings.model) {
-                        ForEach(AppSettings.models, id: \.id) { Text($0.title).tag($0.id) }
-                    }
-                    .settingsPopUp()
-                }
-                RowDivider()
-                SettingRow(title: "快速模式", detail: "优先处理，消耗更多额度") {
+                SettingRow(title: "快速模式", detail: hub.polishSupport.fastTierDetail) {
                     Toggle("", isOn: $settings.fastTier).labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
                 RowDivider()

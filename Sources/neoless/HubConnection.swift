@@ -37,11 +37,16 @@ final class HubConnection: ObservableObject {
             if case .connected(let health) = reach, health.asr.ready || health.asr.largeModel != nil {
                 models = NeoModelNames(large: health.asr.largeModel, small: health.asr.smallModel)
             }
+            // What it does with 整理模型 is the hub's own, whatever its recognition is doing.
+            if case .connected(let health) = reach { polish = NeoPolishSupport(health: health) }
         }
     }
     /// The Neo's large and small speech models as it last named them (`GET /v1/health`), nil until it has answered.
     /// Kept while it is out of reach, so 识别模型 goes on being sent as chosen; forgotten with the pairing.
     @Published private var models: NeoModelNames?
+    /// What the Neo does with 整理模型 and 快速模式 as it last said; like `models`, kept while it is out of reach and
+    /// forgotten with the pairing.
+    @Published private var polish: NeoPolishSupport = .unknown
     /// A pairing link that was opened (`neoless://pair?…`), waiting for 配对 in Settings: a link on a web page must
     /// not be able to send this Mac's recordings to another server on its own.
     @Published var pending: HubPairing?
@@ -170,6 +175,10 @@ final class HubConnection: ObservableObject {
         if case .connected(let health) = status, health.asr.ready { current = health.asr.model }
         return NeoModelNames(current: current, large: models?.large, small: models?.small)
     }
+
+    /// What the Neo in use does with 整理模型 and 快速模式, as far as it has said: a Neo whose hub is from before them
+    /// polishes with its own settings.json model, and the rows say so (`NeoPolishSupport`).
+    var polishSupport: NeoPolishSupport { isActive ? polish : .unknown }
 
     /// What a recording asks the Neo for: the choice in Settings, or nothing (自动) on a Neo that would not act
     /// on it (`NeoModelChoice.asked`).
@@ -339,6 +348,7 @@ final class HubConnection: ObservableObject {
         lastCheck = Date()
         // Another Neo, or this one again: what it has is what it says now.
         models = nil
+        polish = .unknown
         // The rows say the rest: paired under this name, and whether the Neo answers (checked again later).
         switch checked {
         case .success(let health): reach = .connected(health)
@@ -390,6 +400,7 @@ final class HubConnection: ObservableObject {
         checking = nil
         reach = .unknown
         models = nil
+        polish = .unknown
         pending = nil
         message = nil
         onUnpaired?()
@@ -411,6 +422,7 @@ final class HubConnection: ObservableObject {
         settings.hubEnabled = status != .off
         // Each state on its own: only a connected one says what the Neo has.
         models = nil
+        polish = .unknown
         switch status {
         case .connected(let health): reach = .connected(health)
         case .unreachable(let why): reach = .unreachable(why)

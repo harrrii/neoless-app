@@ -13,18 +13,23 @@ public struct HubHistoryEntry: Codable, Equatable, Sendable {
     public var durationSeconds: Double?
     /// The user changed the text afterwards (`…/edit`).
     public var edited: Bool
+    /// The ChatGPT model that polished the text (`PolishOptions.model`), when it was polished: nil when it is the
+    /// original (原样转写, a polish that failed) and in entries from before it was kept.
+    public var polishModel: String?
 
     public init(result: DictationResult, appName: String? = nil, bundleID: String? = nil, client: HubClientKind? = nil,
-                clientVersion: String? = nil, durationSeconds: Double? = nil, edited: Bool = false) {
+                clientVersion: String? = nil, durationSeconds: Double? = nil, edited: Bool = false,
+                polishModel: String? = nil) {
         self.result = result; self.appName = appName; self.bundleID = bundleID; self.client = client
         self.clientVersion = clientVersion; self.durationSeconds = durationSeconds; self.edited = edited
+        self.polishModel = polishModel
     }
 
     public var item: HistoryItem { HistoryItem(result: result, appName: appName, client: client, edited: edited) }
 
     private enum CodingKeys: String, CodingKey {
         case id, clientRecordingID, raw, text, mode, polished, fallback, recognizer, timings, createdAt
-        case appName, bundleID, client, clientVersion, durationSeconds, edited
+        case appName, bundleID, client, clientVersion, durationSeconds, edited, polishModel
     }
 
     public init(from decoder: Decoder) throws {
@@ -50,6 +55,8 @@ public struct HubHistoryEntry: Codable, Equatable, Sendable {
         clientVersion = try c.decodeIfPresent(String.self, forKey: .clientVersion)
         durationSeconds = try c.decodeIfPresent(Double.self, forKey: .durationSeconds)
         edited = try c.decodeIfPresent(Bool.self, forKey: .edited) ?? false
+        // A new key: an older hub reading this file passes over it.
+        polishModel = try? c.decodeIfPresent(String.self, forKey: .polishModel)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -70,6 +77,7 @@ public struct HubHistoryEntry: Codable, Equatable, Sendable {
         try c.encodeIfPresent(clientVersion, forKey: .clientVersion)
         try c.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
         try c.encode(edited, forKey: .edited)
+        try c.encodeIfPresent(polishModel, forKey: .polishModel)
     }
 }
 

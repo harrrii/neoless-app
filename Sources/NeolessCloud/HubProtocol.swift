@@ -410,10 +410,15 @@ public struct HubHealth: Codable, Equatable, Sendable {
     /// The hub's 整理超时 floor in seconds (settings.json `polishTimeout`, 4–30): how long its ChatGPT polish may
     /// take at least, so devices size their budgets with it. Older hubs leave it out (10).
     public var polishTimeout: Double?
+    /// The models the hub polishes with when a request names one (`DictationRequest.polishModel`): its
+    /// `PolishModel.all`. Hubs from before 整理模型 leave it out, and polish everything with their own settings.json
+    /// model and 快速模式 whatever a device asks for, so Settings can say so (`NeoPolishSupport`).
+    public var polishModels: [String]?
 
-    public init(ok: Bool = true, version: String, asr: ASR, chatgpt: ChatGPT, device: String, polishTimeout: Double? = nil) {
+    public init(ok: Bool = true, version: String, asr: ASR, chatgpt: ChatGPT, device: String, polishTimeout: Double? = nil,
+                polishModels: [String]? = nil) {
         self.ok = ok; self.version = version; self.asr = asr; self.chatgpt = chatgpt; self.device = device
-        self.polishTimeout = polishTimeout
+        self.polishTimeout = polishTimeout; self.polishModels = polishModels
     }
 }
 
@@ -455,15 +460,20 @@ public struct DictationRequest: Codable, Equatable, Sendable {
     /// The speech model the device asks for; left out (older devices) means `auto`, and so does a value this
     /// version does not know (`HubASRModel.init(from:)`).
     public var asrModel: HubASRModel?
+    /// The ChatGPT model the device's 整理模型 setting names. The hub polishes with it when it is one of
+    /// `PolishModel.all`; left out (older devices), or one the hub does not know, it uses its own (settings.json).
+    public var polishModel: String?
+    /// The device's 快速模式 (`PolishOptions.fastTier`); left out, the hub's own.
+    public var fastTier: Bool?
 
     public init(mode: DictationMode, autoStructured: Bool, appName: String? = nil, bundleID: String? = nil,
                 locale: String = "zh-CN", localTranscript: String? = nil, durationSeconds: Double,
                 clientRecordingID: UUID = UUID(), client: HubClientKind = .current, clientVersion: String,
-                asrModel: HubASRModel? = nil) {
+                asrModel: HubASRModel? = nil, polishModel: String? = nil, fastTier: Bool? = nil) {
         self.mode = mode; self.autoStructured = autoStructured; self.appName = appName; self.bundleID = bundleID
         self.locale = locale; self.localTranscript = localTranscript; self.durationSeconds = durationSeconds
         self.clientRecordingID = clientRecordingID; self.client = client; self.clientVersion = clientVersion
-        self.asrModel = asrModel
+        self.asrModel = asrModel; self.polishModel = polishModel; self.fastTier = fastTier
     }
 
     /// The mode the hub polishes in.
@@ -484,12 +494,12 @@ public struct DictationRequest: Codable, Equatable, Sendable {
     }
 
     /// The `POST /v1/polish` for this recording's own transcript, sent when the hub heard nothing (`raw` came
-    /// back empty) because the transcript was left out of the header. Same recording, same `clientRecordingID`:
-    /// the hub keeps no empty result under it.
+    /// back empty) because the transcript was left out of the header. Same recording, same `clientRecordingID`
+    /// (the hub keeps no empty result under it), same 整理模型 and 快速模式.
     public func polishRequest(text: String) -> PolishRequest {
         PolishRequest(text: text, mode: mode, autoStructured: autoStructured, appName: appName, bundleID: bundleID,
                       clientRecordingID: clientRecordingID, client: client, clientVersion: clientVersion,
-                      durationSeconds: durationSeconds)
+                      durationSeconds: durationSeconds, polishModel: polishModel, fastTier: fastTier)
     }
 
     /// Reads an `X-Neoless-Request` value.
@@ -560,13 +570,17 @@ public struct PolishRequest: Codable, Equatable, Sendable {
     public var client: HubClientKind?
     public var clientVersion: String?
     public var durationSeconds: Double?
+    /// As `DictationRequest.polishModel` and `fastTier`: left out, or a model the hub does not know, the hub's own.
+    public var polishModel: String?
+    public var fastTier: Bool?
 
     public init(text: String, mode: DictationMode, autoStructured: Bool, appName: String? = nil, bundleID: String? = nil,
                 clientRecordingID: UUID = UUID(), client: HubClientKind? = .current, clientVersion: String? = nil,
-                durationSeconds: Double? = nil) {
+                durationSeconds: Double? = nil, polishModel: String? = nil, fastTier: Bool? = nil) {
         self.text = text; self.mode = mode; self.autoStructured = autoStructured; self.appName = appName
         self.bundleID = bundleID; self.clientRecordingID = clientRecordingID; self.client = client
         self.clientVersion = clientVersion; self.durationSeconds = durationSeconds
+        self.polishModel = polishModel; self.fastTier = fastTier
     }
 
     public var effectiveMode: DictationMode {
@@ -586,7 +600,12 @@ public struct WarmRequest: Codable, Equatable, Sendable {
 /// `POST /v1/dictations/{id}/repolish`. No mode: the dictation's own (原样转写 is polished as 自然整理).
 public struct RepolishRequest: Codable, Equatable, Sendable {
     public var mode: DictationMode?
-    public init(mode: DictationMode? = nil) { self.mode = mode }
+    /// As `DictationRequest.polishModel` and `fastTier`: left out, or a model the hub does not know, the hub's own.
+    public var polishModel: String?
+    public var fastTier: Bool?
+    public init(mode: DictationMode? = nil, polishModel: String? = nil, fastTier: Bool? = nil) {
+        self.mode = mode; self.polishModel = polishModel; self.fastTier = fastTier
+    }
 }
 
 /// `POST /v1/dictations/{id}/edit`: the final text after the user changed it.

@@ -7,8 +7,10 @@ import NeolessCore
 public protocol HubPolishing: AnyObject {
     /// The polished text, or an error (`PolishError`, a network error). The time limit is built in.
     /// `extras`: the swaps made twice for this transcript, and the user's habits (`PolishExtras`).
+    /// `options`: the model, 快速模式 and time limit, the device's choice on the hub's settings
+    /// (`HubConfig.polishOptions(model:fastTier:)`).
     func polish(_ transcript: String, mode: DictationMode, appName: String?, vocabulary: Vocabulary.PromptWords,
-                corrections: [CorrectionPair], extras: PolishExtras) async throws -> String
+                corrections: [CorrectionPair], extras: PolishExtras, options: PolishOptions) async throws -> String
     /// For `GET /v1/health`.
     var health: HubHealth.ChatGPT { get }
     /// Returns once no login token refresh is running. A polish that timed out stops waiting for its refresh,
@@ -85,17 +87,18 @@ public final class ChatGPTPolisher: HubPolishing {
     }
 
     public func polish(_ transcript: String, mode: DictationMode, appName: String?, vocabulary: Vocabulary.PromptWords,
-                       corrections: [CorrectionPair], extras: PolishExtras) async throws -> String {
+                       corrections: [CorrectionPair], extras: PolishExtras, options: PolishOptions) async throws -> String {
         try await Polisher.polish(transcript: transcript, vocabulary: vocabulary, appName: appName, account: current,
-                                  options: config().polishOptions, corrections: corrections, extras: extras, mode: mode,
+                                  options: options, corrections: corrections, extras: extras, mode: mode,
                                   overrides: overrides, session: session)
     }
 
-    /// `neoless-hub eval`: one transcript with instructions already built, through the same request, login and
-    /// settings as a dictation.
-    public func polish(_ transcript: String, instructions: String, appName: String?) async throws -> String {
+    /// `neoless-hub eval`: one transcript with instructions already built, through the same request and login as a
+    /// dictation, with `options` (the hub's settings).
+    public func polish(_ transcript: String, instructions: String, appName: String?,
+                       options: PolishOptions) async throws -> String {
         try await Polisher.polish(transcript: transcript, instructions: instructions, appName: appName, account: current,
-                                  options: config().polishOptions, session: session)
+                                  options: options, session: session)
     }
 
     public var health: HubHealth.ChatGPT { Self.health(of: current) }

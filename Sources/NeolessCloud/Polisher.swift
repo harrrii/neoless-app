@@ -1,7 +1,8 @@
 import Foundation
 import NeolessCore
 
-/// The settings one polish request runs with. The Mac app reads them from its settings, the hub from its own.
+/// The settings one polish request runs with. The Mac app reads them from its settings; the hub from its own, with
+/// the model and 快速模式 the device asked for (`HubConfig.polishOptions(model:fastTier:)`).
 public struct PolishOptions: Equatable, Sendable {
     public var model: String
     /// The Fast tier (`service_tier: priority`).
@@ -9,10 +10,80 @@ public struct PolishOptions: Equatable, Sendable {
     /// The user's 整理超时 setting: the floor of the length-scaled budget (`PolishTimeout.seconds`).
     public var minimumTimeout: TimeInterval
 
+    /// The hub's model when its settings.json names none, and so what it polishes with for a device that does not
+    /// say (`DictationRequest.polishModel` left out: an app from before the field). The app's own default is
+    /// `PolishModel.recommended`.
     public static let defaultModel = "gpt-6.1-sol"
 
     public init(model: String = PolishOptions.defaultModel, fastTier: Bool = true, minimumTimeout: TimeInterval = 10) {
         self.model = model; self.fastTier = fastTier; self.minimumTimeout = minimumTimeout
+    }
+}
+
+/// The ChatGPT models text is polished with, one list for everyone: the app's 整理模型 picker shows them, and the hub
+/// polishes with the model a device asks for (`DictationRequest.polishModel`) only when it is one of them.
+public struct PolishModel: Equatable, Identifiable, Sendable {
+    /// What a request names (`PolishOptions.model`), and what the app stores.
+    public let id: String
+    /// What Settings shows.
+    public let title: String
+
+    public init(id: String, title: String) { self.id = id; self.title = title }
+
+    /// In the order the picker shows them, the recommended one first.
+    public static let all: [PolishModel] = [
+        PolishModel(id: "gpt-6-luna", title: "GPT-6-Luna（更快，推荐）"),
+        PolishModel(id: "gpt-6.1-sol", title: "GPT-6.1-Sol（更细致，慢一些）"),
+        PolishModel(id: "gpt-5.6-luna", title: "GPT-5.6-Luna"),
+    ]
+
+    /// The app's 整理模型 until the user picks one: quicker than `PolishOptions.defaultModel`, a little less careful.
+    public static let recommended = "gpt-6-luna"
+
+    /// Whether `id` is one of `all`, exactly as written there.
+    public static func isKnown(_ id: String?) -> Bool {
+        guard let id else { return false }
+        return all.contains { $0.id == id }
+    }
+}
+
+/// What the Neo in use does with the device's 整理模型 and 快速模式, as far as its `GET /v1/health` says
+/// (`HubHealth.polishModels`), and what Settings says under the two rows. Requests carry both whatever it says: a hub
+/// that does not read them passes over them, and one updated in the meantime follows them from the next request on.
+public enum NeoPolishSupport: Equatable, Sendable {
+    /// It has not answered since the app started, or the Neo is not in use.
+    case unknown
+    /// Its hub is from before 整理模型: it polishes with its own settings.json model and 快速模式, whatever is asked.
+    case outdated
+    /// It polishes with any of these models when asked for one, and with the 快速模式 asked for.
+    case listed([String])
+
+    /// What a Neo that answered with `health` does.
+    public init(health: HubHealth) {
+        self = health.polishModels.map(Self.listed) ?? .outdated
+    }
+
+    /// Whether a Neo that has said so polishes with `model` when asked: nil while it has not said.
+    public func follows(_ model: String) -> Bool? {
+        switch self {
+        case .unknown: return nil
+        case .outdated: return false
+        case .listed(let models): return models.contains(model)
+        }
+    }
+
+    /// The line under 整理模型 with `model` chosen. Until the Neo has said, what a hub that reads the choice does.
+    public func modelDetail(_ model: String) -> String {
+        switch self {
+        case .outdated: return "Neo 更新后才按这里，现在 Neo 用它自己设的模型"
+        case .listed where follows(model) == false: return "这台 Neo 没有这个模型，用它自己设的模型整理"
+        case .unknown, .listed: return "用 Neo 处理时也按这里"
+        }
+    }
+
+    /// The line under 快速模式 (a Neo that lists models takes the device's 快速模式 even with a model it does not have).
+    public var fastTierDetail: String {
+        self == .outdated ? "优先处理，消耗更多额度；Neo 更新后才对 Neo 生效" : "优先处理，消耗更多额度；用 Neo 时也生效"
     }
 }
 

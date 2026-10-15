@@ -167,6 +167,33 @@ private final class Locked<T>: @unchecked Sendable {
         #expect(polish?.request.value(forHTTPHeaderField: "Content-Type") == "application/json; charset=utf-8")
     }
 
+    /// 整理模型 and 快速模式 reach the Neo with every call that polishes there: the recording's header, `/v1/polish`
+    /// and `…/repolish`. Left out, nothing is sent for them.
+    @Test func theDevicesPolishModelGoesWithEveryPolishingCall() async throws {
+        let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let hub = Harness { _, _, _ in .respond(status: 200, body: json(result(for: id))) }
+        defer { hub.done() }
+        var request = self.request
+        request.polishModel = "gpt-6-luna"
+        request.fastTier = false
+        _ = try await hub.client.dictate(audio: Data([1, 2, 3]), type: .m4a, request: request)
+        _ = try await hub.client.polish(request.polishRequest(text: "明天开会"))
+        _ = try await hub.client.repolish(id: id, mode: .natural, polishModel: "gpt-6-luna", fastTier: false)
+        _ = try await hub.client.repolish(id: id)
+
+        let seen = hub.requests
+        #expect(seen.count == 4)
+        guard seen.count == 4 else { return }
+        let header = try #require(seen[0].request.value(forHTTPHeaderField: HubHeader.request))
+        let sent = try DictationRequest(headerValue: header)
+        #expect(sent.polishModel == "gpt-6-luna" && sent.fastTier == false)
+        let polish = try HubJSON.decode(PolishRequest.self, from: seen[1].body)
+        #expect(polish.polishModel == "gpt-6-luna" && polish.fastTier == false)
+        #expect(try HubJSON.decode(RepolishRequest.self, from: seen[2].body)
+                == RepolishRequest(mode: .natural, polishModel: "gpt-6-luna", fastTier: false))
+        #expect(seen[3].body == Data("{}".utf8))
+    }
+
     @Test func queryValuesArePercentEncoded() async throws {
         let hub = Harness { request, _, _ in
             request.url?.path == "/v1/history" ? .respond(status: 200, body: json(HistoryPage(items: [])))

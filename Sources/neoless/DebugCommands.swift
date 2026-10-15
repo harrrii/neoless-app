@@ -677,19 +677,24 @@ enum DebugCommands {
                                      access: HubAccess(clientID: "snapshot0123456789abcdef.access", clientSecret: "snapshot-secret-value"))
         let large = "Qwen3-ASR-1.7B-4bit", small = "Qwen3-ASR-0.6B-4bit"
         let asr = HubHealth.ASR(ready: true, model: large, largeModel: large, smallModel: small, autoUses: .large)
+        // A hub that polishes with the model a device asks for says which ones it has.
+        let listed = PolishModel.all.map(\.id)
         let working = HubHealth(version: "1.3.0", asr: asr, chatgpt: .init(ready: true, account: "y***@example.com"),
-                                device: "我的 Mac")
+                                device: "我的 Mac", polishModels: listed)
         // A busy Neo, on its small model for a while.
         let busy = HubHealth(version: "1.3.0", asr: .init(ready: true, model: small, largeModel: large, smallModel: small,
                                                           autoUses: .small),
-                             chatgpt: .init(ready: true, account: "y***@example.com"), device: "我的 Mac")
-        // A Neo whose hub is from before 识别模型 (it names neither model), and one that runs a single model.
+                             chatgpt: .init(ready: true, account: "y***@example.com"), device: "我的 Mac",
+                             polishModels: listed)
+        // A Neo whose hub is from before 识别模型 (it names neither model) and 整理模型 (it lists no models), and one
+        // that runs a single model.
         let outdated = HubHealth(version: "1.2.0", asr: .init(ready: true, model: large),
                                  chatgpt: .init(ready: true, account: "y***@example.com"), device: "我的 Mac")
         let single = HubHealth(version: "1.3.0", asr: .init(ready: true, model: large, largeModel: large, autoUses: .large),
-                               chatgpt: .init(ready: true, account: "y***@example.com"), device: "我的 Mac")
+                               chatgpt: .init(ready: true, account: "y***@example.com"), device: "我的 Mac",
+                               polishModels: listed)
         let noChatGPT = HubHealth(version: "1.3.0", asr: asr, chatgpt: .init(ready: false, problem: "Neo 还没登录 ChatGPT"),
-                                  device: "我的 Mac")
+                                  device: "我的 Mac", polishModels: listed)
         let size = NSSize(width: 1000, height: 1000)
         let compact = NSSize(width: 860, height: 900)
         controller.current = records.first
@@ -717,6 +722,15 @@ enum DebugCommands {
         // (The Neo out of reach since the app started is "settings-neo-unreachable" below.)
         hub._debugSet(pairing: pairing, status: .connected(outdated))
         await shot("settings-neo-model-outdated", nil, size)
+        // 整理模型 and 快速模式 (高级 open, the whole page): on a Neo that follows them, then on one whose hub is from
+        // before them, where both lines say it uses its own until it is updated.
+        let page = NSSize(width: 1000, height: 2300)
+        SettingsView.advancedOpen = true
+        await shot("settings-neo-polish-outdated", nil, page)
+        await shot("settings-neo-polish-outdated-compact", nil, NSSize(width: 860, height: 2500))
+        hub._debugSet(pairing: pairing, status: .connected(working))
+        await shot("settings-neo-polish-follows", nil, page)
+        SettingsView.advancedOpen = false
         hub._debugSet(pairing: pairing, status: .connected(single))
         await shot("settings-neo-model-single", nil, size)
         hub._debugSet(pairing: pairing, status: .connected(noChatGPT))
@@ -1069,7 +1083,7 @@ private struct SnapshotSettings {
     var hotkeyEnabled = true
     var hotkeyStyle = HotkeyStyle.auto
     var microphoneUID = AppSettings.microphoneAuto
-    var model = "gpt-6.1-sol"
+    var model = PolishModel.recommended
     var fastTier = true
     var polishTimeout = 10.0
     var restoreClipboard = true

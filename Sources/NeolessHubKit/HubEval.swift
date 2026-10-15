@@ -6,7 +6,7 @@ import NeolessCore
 /// own login and settings; tests stub it).
 @MainActor
 public protocol HubEvalPolishing: AnyObject {
-    func polish(_ transcript: String, instructions: String, appName: String?) async throws -> String
+    func polish(_ transcript: String, instructions: String, appName: String?, options: PolishOptions) async throws -> String
     /// Returns once no login token refresh is running: the command waits for it before exiting.
     func waitForRefresh() async
 }
@@ -49,14 +49,16 @@ public enum HubEval {
         public var fallback: String?
         /// How long the polish took (0 for 原样转写).
         public var ms: Int
+        /// The ChatGPT model it was sent to (nil for 原样转写, which is not sent).
+        public var model: String?
 
         public init(id: String, mode: DictationMode, app: String?, raw: String, output: String, polished: Bool,
-                    fallback: String?, ms: Int) {
+                    fallback: String?, ms: Int, model: String? = nil) {
             self.id = id; self.mode = mode; self.app = app; self.raw = raw; self.output = output
-            self.polished = polished; self.fallback = fallback; self.ms = ms
+            self.polished = polished; self.fallback = fallback; self.ms = ms; self.model = model
         }
 
-        enum CodingKeys: String, CodingKey { case id, mode, app, raw, output, polished, fallback, ms }
+        enum CodingKeys: String, CodingKey { case id, mode, app, raw, output, polished, fallback, ms, model }
 
         // Every key is written, an empty one as null, so each line has the same shape.
         public func encode(to encoder: Encoder) throws {
@@ -69,6 +71,7 @@ public enum HubEval {
             try c.encode(polished, forKey: .polished)
             try c.encode(fallback, forKey: .fallback)
             try c.encode(ms, forKey: .ms)
+            try c.encode(model, forKey: .model)
         }
     }
 
@@ -150,12 +153,15 @@ public enum HubEval {
 
     /// Runs `samples` one after another and returns the results so far and why it stopped early, if it did.
     /// - Parameters:
+    ///   - options: the model, 快速模式 and time limit every sample is polished with (the hub's settings); each
+    ///     result names the model.
     ///   - overrides: the static text to use for 自然整理 and 结构化 (`.natural`, `.structured`); missing ones are live.
     ///   - pause: between two ChatGPT calls.
     ///   - progress: one line per sample (for standard error).
     ///   - interrupted: checked before each sample.
     public static func run(_ samples: [Sample], words: WordStore, polisher: HubEvalPolishing,
-                           overrides: [DictationMode: String] = [:], pause: Duration = .seconds(1),
+                           options: PolishOptions = PolishOptions(), overrides: [DictationMode: String] = [:],
+                           pause: Duration = .seconds(1),
                            progress: (String) -> Void = { _ in },
                            interrupted: () -> Bool = { false }) async -> (results: [Result], stop: Stop?) {
         var results: [Result] = []
@@ -178,16 +184,17 @@ public enum HubEval {
             let text = instructions(for: raw, mode: mode, words: words, staticText: overrides[mode])
             let start = ContinuousClock.now
             do {
-                let out = try await polisher.polish(raw, instructions: text, appName: sample.app)
+                let out = try await polisher.polish(raw, instructions: text, appName: sample.app, options: options)
                 let ms = HubService.ms(since: start)
                 results.append(Result(id: sample.id, mode: mode, app: sample.app, raw: sample.raw, output: out,
-                                      polished: true, fallback: nil, ms: ms))
+                                      polished: true, fallback: nil, ms: ms, model: options.model))
                 progress("\(tag)：\(ms) ms")
             } catch {
                 let ms = HubService.ms(since: start)
                 let why = PolishFailure.detail(error)
                 results.append(Result(id: sample.id, mode: mode, app: sample.app, raw: sample.raw,
-                                      output: words.applyConfirmed(raw), polished: false, fallback: why, ms: ms))
+                                      output: words.applyConfirmed(raw), polished: false, fallback: why, ms: ms,
+                                      model: options.model))
                 progress("\(tag)：没整理成（\(why)）")
                 if stopsTheRun(error) { return (results, .login(why)) }
             }
