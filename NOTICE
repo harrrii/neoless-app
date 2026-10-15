@@ -1,0 +1,51 @@
+neoless
+Copyright (C) 2026 the neoless authors
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License, version 3 only, as published by the
+Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+The full text of the license is in the file LICENSE.
+
+Why this licence: parts of neoless (how the polishing prompt treats the user's hot
+words, the live transcript rail, how the clipboard is restored after a paste) were
+modelled on OpenLess (https://github.com/Open-Less/openless), which is licensed
+AGPL-3.0-only. The text and code here were written for neoless, but they follow that
+project closely enough that the same licence is the honest choice. See CREDITS.md.
+
+Two things this licence cannot settle, both described in CREDITS.md: the outline of
+the polishing prompt still follows a third-party style pack whose licence is unclear
+(its sentences were all rewritten), and the look of the recording capsule follows
+Typeless (a commercial product) and OpenLess in spirit; its code is neoless's own.
+
+neoless is an unofficial personal project. It is not affiliated with Typeless,
+OpenLess, Cloudflare, Alibaba, Apple or the provider of any AI model it can sign in
+to. Their names are used only to say what neoless works with or was modelled on.
+Using a provider's account is subject to that provider's terms. The sign-in follows
+the flow of the provider's open-source command-line client; none of its code is here.
+
+Third-party software that neoless uses is not included in this repository. It is
+fetched when you build or set it up, under its own licence:
+
+  Swift packages (Package.resolved), all Apache-2.0:
+    Hummingbird, AsyncHTTPClient, SwiftNIO (and nio-extras, nio-http2, nio-ssl,
+    nio-transport-services), swift-log, swift-metrics, swift-http-types,
+    swift-http-structured-headers, swift-crypto, swift-certificates, swift-asn1,
+    swift-collections, swift-algorithms, swift-async-algorithms, swift-atomics,
+    swift-numerics, swift-system, swift-service-context, swift-service-lifecycle,
+    swift-distributed-tracing
+
+  Python packages for the ASR worker (hub/asr/requirements.txt):
+    mlx (MIT), mlx-audio (MIT), aiohttp (Apache-2.0 and MIT), numpy (BSD-3-Clause
+    and others), scipy (BSD-3-Clause), huggingface_hub (Apache-2.0)
+
+  Model: mlx-community/Qwen3-ASR-0.6B-4bit, an MLX conversion of Qwen3-ASR
+    (Apache-2.0 according to its model card), downloaded by hub/asr/fetch_model.py
+
+  cloudflared (Apache-2.0), installed separately

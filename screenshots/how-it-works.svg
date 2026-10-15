@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc"
+     font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">neoless 怎么工作</title>
+  <desc id="desc">你的 Mac 录音，经 Cloudflare 隧道和门禁送到你自己的另一台 Mac（处理中心）识别和整理，文字回到光标处。选本机识别时只把本机文字经同一条隧道发去整理；连不上处理中心时，这台 Mac 自己完成。</desc>
+  <defs>
+    <marker id="head-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2563EB"/>
+    </marker>
+    <marker id="head-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16A34A"/>
+    </marker>
+    <marker id="head-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7C3AED"/>
+    </marker>
+    <marker id="head-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#64748B"/>
+    </marker>
+  </defs>
+
+  <!-- Its own light background, so the picture reads the same in a dark page. -->
+  <rect width="1200" height="520" rx="24" fill="#F8FAFC"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="518.5" rx="23.5" fill="none" stroke="#E2E8F0" stroke-width="1.5"/>
+
+  <text x="48" y="56" font-size="22" font-weight="700" fill="#0F172A">neoless 怎么工作</text>
+  <text x="48" y="84" font-size="14" fill="#64748B">按一下 fn 说话，再按一下 fn，整理好的文字回到光标处。</text>
+
+  <!-- Your Mac -->
+  <rect x="48" y="110" width="300" height="280" rx="18" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="72" y="148" font-size="20" font-weight="700" fill="#0F172A">你的 Mac</text>
+  <text x="72" y="174" font-size="13" fill="#64748B">装着 neoless 的这台</text>
+
+  <rect x="72" y="190" width="252" height="44" rx="12" fill="#EFF6FF"/>
+  <circle cx="94" cy="212" r="11" fill="#2563EB"/>
+  <text x="94" y="216.5" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+  <text x="114" y="217.5" font-size="16" fill="#0F172A">按 fn 说话</text>
+
+  <rect x="72" y="244" width="252" height="44" rx="12" fill="#EFF6FF"/>
+  <circle cx="94" cy="266" r="11" fill="#2563EB"/>
+  <text x="94" y="270.5" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+  <text x="114" y="271.5" font-size="16" fill="#0F172A">录音 + 本机实时字幕</text>
+
+  <rect x="72" y="318" width="252" height="44" rx="12" fill="#F0FDF4" stroke="#86EFAC" stroke-width="1.5"/>
+  <circle cx="94" cy="340" r="11" fill="#16A34A"/>
+  <text x="94" y="344.5" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+  <text x="114" y="345.5" font-size="16" font-weight="600" fill="#14532D">文字回到光标处</text>
+
+  <!-- The tunnel and its two locks -->
+  <text x="600" y="222" font-size="12" fill="#64748B" text-anchor="middle">HTTPS，只有配对过的设备进得来</text>
+  <rect x="455" y="236" width="290" height="134" rx="16" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1.5"/>
+  <text x="600" y="291" font-size="17" font-weight="700" fill="#7C2D12" text-anchor="middle">Cloudflare 隧道</text>
+  <text x="600" y="317" font-size="15" fill="#9A3412" text-anchor="middle">+ 门禁（双重锁）</text>
+  <text x="600" y="341" font-size="12" fill="#C2410C" text-anchor="middle">先过门禁，再凭设备密钥</text>
+
+  <!-- The processing centre -->
+  <rect x="852" y="110" width="300" height="280" rx="18" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+  <text x="876" y="148" font-size="20" font-weight="700" fill="#0F172A">处理中心</text>
+  <text x="876" y="174" font-size="13" fill="#64748B">你自己的另一台 Apple 芯片 Mac</text>
+  <text x="876" y="217" font-size="13" fill="#64748B">不经过任何语音识别厂商</text>
+
+  <rect x="876" y="244" width="252" height="44" rx="12" fill="#EFF6FF"/>
+  <circle cx="898" cy="266" r="11" fill="#2563EB"/>
+  <text x="898" y="270.5" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+  <text x="918" y="271.5" font-size="16" fill="#0F172A">Qwen3-ASR 识别<tspan dx="6" font-size="12" fill="#64748B">大 / 小模型</tspan></text>
+
+  <line x1="1002" y1="290" x2="1002" y2="314" stroke="#64748B" stroke-width="1.5" marker-end="url(#head-grey)"/>
+
+  <rect x="876" y="318" width="252" height="44" rx="12" fill="#EFF6FF"/>
+  <circle cx="898" cy="340" r="11" fill="#2563EB"/>
+  <text x="898" y="344.5" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+  <text x="918" y="345.5" font-size="15" fill="#0F172A">用你自己的 AI 模型账号整理</text>
+
+  <!-- There: the recording -->
+  <line x1="350" y1="266" x2="452" y2="266" stroke="#2563EB" stroke-width="2.5" marker-end="url(#head-blue)"/>
+  <text x="401" y="256" font-size="13" fill="#2563EB" text-anchor="middle">录音</text>
+  <line x1="747" y1="266" x2="849" y2="266" stroke="#2563EB" stroke-width="2.5" marker-end="url(#head-blue)"/>
+  <text x="798" y="256" font-size="13" fill="#2563EB" text-anchor="middle">录音</text>
+
+  <!-- Back: the text -->
+  <line x1="850" y1="340" x2="748" y2="340" stroke="#16A34A" stroke-width="2.5" marker-end="url(#head-green)"/>
+  <text x="798" y="330" font-size="13" fill="#16A34A" text-anchor="middle">文字</text>
+  <line x1="453" y1="340" x2="327" y2="340" stroke="#16A34A" stroke-width="2.5" marker-end="url(#head-green)"/>
+  <text x="401" y="330" font-size="13" fill="#16A34A" text-anchor="middle">文字</text>
+
+  <!-- 本机识别（最快）: only this Mac's text goes to be tidied, through the same tunnel and locks -->
+  <circle cx="198" cy="390" r="4" fill="#7C3AED"/>
+  <path d="M198 390 V412 H560 V375" fill="none" stroke="#7C3AED" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#head-purple)"/>
+  <path d="M640 371 V412 H1002 V366" fill="none" stroke="#7C3AED" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#head-purple)"/>
+  <text x="600" y="438" font-size="14" fill="#6D28D9" text-anchor="middle">本机识别（最快）：只把本机文字经同一条隧道发去整理；本机没听清时才发录音</text>
+
+  <!-- Out of reach: this Mac does it all -->
+  <rect x="350" y="456" width="500" height="40" rx="20" fill="#F1F5F9" stroke="#E2E8F0" stroke-width="1.5"/>
+  <path d="M380 470 A8 8 0 1 0 384.5 477" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round"/>
+  <path d="M380 465 L380 471 L386 471" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="398" y="481" font-size="14" fill="#334155">连不上处理中心时，这台 Mac 自己完成：本机识别，用你的账号整理</text>
+</svg>

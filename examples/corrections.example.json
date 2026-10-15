@@ -1,0 +1,9 @@
+{
+  "corrections": [
+    { "wrong": "全线 / 全县", "right": "权限", "count": 2, "confidence": "high",
+      "records": ["2026-01-02T03:04:05.678901+00:00", "2026-01-02T02:00:00.123456+00:00"] },
+    { "wrong": "Get Hub / Githup", "right": "GitHub", "count": 3, "confidence": "high" },
+    { "wrong": "布署", "right": "部署", "confidence": "high" },
+    { "wrong": "PR", "right": "PRD", "count": 1, "confidence": "medium" }
+  ]
+}

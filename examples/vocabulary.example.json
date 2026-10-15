@@ -1,0 +1,10 @@
+{
+  "terms": [
+    { "term": "GitHub", "tier": 1, "rank": 1 },
+    { "term": "权限", "tier": 1, "rank": 2 },
+    { "term": "API Key", "tier": 2, "rank": 10 },
+    { "term": "回滚", "tier": 3, "rank": 20 },
+    { "term": "Githup", "tier": 1, "rank": 30 },
+    { "term": "嗯那个", "tier": 5, "rank": 99 }
+  ]
+}

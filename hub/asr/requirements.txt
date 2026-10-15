@@ -1,0 +1,9 @@
+# What the ASR worker needs, with the versions it was last run with (Python 3.14, macOS on Apple silicon).
+# numpy and scipy at these versions need Python 3.12 or newer.
+# Newer ones may work; mlx-audio's Qwen3-ASR support is recent, so older ones may not.
+mlx>=0.32.2
+mlx-audio>=0.5.5
+aiohttp>=3.14.3
+numpy>=2.5.3
+scipy>=1.18.1
+huggingface_hub

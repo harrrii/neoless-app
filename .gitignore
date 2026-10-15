@@ -1,0 +1,21 @@
+.build/
+.build-*/
+build/
+.swiftpm/
+.DS_Store
+__pycache__/
+.venv/
+
+# Your own settings and private files (scripts/hub-deploy.sh, scripts/make-public.sh): never committed.
+/local/
+# An older place for the same settings.
+/hub/local.env
+
+# Dictation samples, recordings and evaluation results are private: never commit them here.
+samples/
+neoless-openless-samples/
+tune-eval/
+*.wav
+*.m4a
+*.caf
+*.aiff
