@@ -498,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// right after choosing it): a ⌘V then would land in the middle of it.
     @objc private func repasteLast() {
         guard let text = lastResult, !dictationRunning else { return }
+        controller.stopRetrying()
         Task { @MainActor in
             // Let the menu finish closing so ⌘V reaches the app, not the menu.
             try? await Task.sleep(nanoseconds: 150_000_000)

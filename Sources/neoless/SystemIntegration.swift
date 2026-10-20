@@ -108,7 +108,19 @@ enum TextInserter {
         let restoreClipboard: Bool
         /// The user's clipboard as read while planning, nil if it was not read.
         fileprivate let saved: SavedClipboard?
+        /// The focused field as read while planning, and, in an app that says when it takes a paste
+        /// (`PasteSignal`), how much text it held: `confirm` compares it with what it holds afterwards.
+        fileprivate let field: AXUIElement?
+        fileprivate let length: Int?
     }
+
+    /// The last paste into an app that says when it takes one (`PasteSignal`), until a newer paste or copy
+    /// takes the clipboard (it also keeps the item's data provider alive while the item may be on it).
+    private static var watched: PasteWatch?
+    /// Apps seen asking for `PasteSignal.type` since launch: a paste they do not ask about was not taken.
+    private static var learned = Set<String>()
+    /// The user pressed a key or clicked while `keepTrying` waited.
+    private static var userActed = false
 
     /// The app to paste into later: the frontmost app now. Call it when recording stops.
     static func currentTarget() -> PasteTarget? {
@@ -151,6 +163,12 @@ enum TextInserter {
                                             inBrowser: FocusedField.isBrowser(bundleID: app.bundleIdentifier),
                                             since: mark?.element)
         }
+        // How much text the field holds, in an app that says when it takes a paste: what `confirm` compares
+        // with when it does not say.
+        var length: Int?
+        if let field = reading.element, PasteSignal.offers(bundleID: atStart?.bundleIdentifier) {
+            length = await FocusProbe.length(of: field)
+        }
         // Read again: the user may have switched apps while we were asking.
         let front = NSWorkspace.shared.frontmostApplication
         let result = InsertPolicy.decide(target: targetPID, frontmost: front?.processIdentifier, ownPID: own,
@@ -158,12 +176,14 @@ enum TextInserter {
                                          focus: reading.field, targetFocusOwner: mark?.owner,
                                          focusOwner: reading.owner, field: reading.match)
         return Plan(result: result, pid: front?.processIdentifier, bundleID: front?.bundleIdentifier ?? target?.bundleID,
-                    restoreClipboard: restoreClipboard, saved: saved)
+                    restoreClipboard: restoreClipboard, saved: saved, field: reading.element, length: length)
     }
 
     /// Step 2: carries the plan out at once and returns what happened. If a different app came to
-    /// the front since `plan`, the text is copied instead of pasted.
-    static func perform(_ plan: Plan, text: String) -> InsertResult {
+    /// the front since `plan`, the text is copied instead of pasted. `confirming`: the caller asks
+    /// `confirm` next whether the app took the text, then `keepTrying` or `giveUp` when it did not; in an
+    /// app that says (`PasteSignal`), the user's clipboard goes back only once the app has taken it.
+    static func perform(_ plan: Plan, text: String, confirming: Bool = false) -> InsertResult {
         var result = plan.result
         var restore = Restore.none
         if result == .pasted {
@@ -172,7 +192,12 @@ enum TextInserter {
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != plan.pid { result = .copiedAppChanged }
         }
         if result == .pasted {
-            paste(text, restoreAfter: restore.delay)
+            let watch = confirming && PasteSignal.offers(bundleID: plan.bundleID)
+                ? PasteWatch(pid: plan.pid ?? 0, bundleID: plan.bundleID, text: text,
+                             confirms: PasteSignal.confirms(bundleID: plan.bundleID, learned: learned),
+                             field: plan.field, length: plan.length)
+                : nil
+            paste(text, restoreAfter: restore.delay, watch: watch)
             if case .impossible = restore { result = .pastedKeptOnClipboard }
         } else if result.isCopied {
             copy(text)
@@ -180,8 +205,149 @@ enum TextInserter {
         return result
     }
 
+    /// Whether the app took the text of the last `perform(confirming: true)`: it asks for `PasteSignal.type`
+    /// within `PasteSignal.wait`, or else the field it went to changed all the same (`PasteCheck.judge`).
+    /// `.unknown` at once for an app that does not say.
+    static func confirm() async -> PasteCheck {
+        guard let watch = watched, watch.confirms else { return .unknown }
+        var signaled = await watch.taken(within: PasteSignal.wait)
+        var now: Int?
+        var same = false
+        if !signaled, let field = watch.field {
+            let reading = await FocusProbe.measure(pid: watch.pid, field: field)
+            same = reading.same
+            now = reading.length
+        }
+        // Asked while the field was being read: taken all the same (its put-back is already on its way).
+        signaled = signaled || watch.isTaken
+        let check = PasteCheck.judge(signaled: signaled, confirms: true, before: watch.length, now: now, sameField: same,
+                                     inserted: watch.text.utf16.count)
+        // Taken without asking: the user's clipboard goes back as after any paste.
+        if check == .taken, !signaled { release(watch) }
+        return check
+    }
+
+    /// After `confirm` said `.notTaken(retries: true)`: ⌘V again every `PasteRetry.interval` until the app takes
+    /// the text, for as long as `PasteRetry.check` lets it (a chat page's input box takes none while its AI is
+    /// answering, and takes it once that is done). True when it was taken. Otherwise, or when the task is
+    /// cancelled (a new dictation), the text stays on the clipboard (`giveUp`).
+    static func keepTrying() async -> Bool {
+        guard let watch = watched, let field = watch.field, let before = watch.length else {
+            giveUp()
+            return false
+        }
+        let started = Date()
+        userActed = false
+        // A key or a click is the user taking over: nothing is sent after it.
+        let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { event in
+            // neoless's own ⌘V is not the user.
+            guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != SyntheticEvent.marker else { return }
+            MainActor.assumeIsolated { TextInserter.userActed = true }
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
+        while true {
+            try? await Task.sleep(for: .seconds(PasteRetry.interval))
+            var same = true
+            var now: Int? = before
+            if !watch.isTaken {
+                let reading = await FocusProbe.measure(pid: watch.pid, field: field)
+                same = reading.same
+                now = reading.length
+            }
+            let stop = PasteRetry.check(taken: watch.isTaken, cancelled: Task.isCancelled || watch !== watched,
+                                        userActed: userActed,
+                                        frontmostIsTarget: NSWorkspace.shared.frontmostApplication?.processIdentifier == watch.pid,
+                                        clipboardOurs: NSPasteboard.general.changeCount == watch.changeCount,
+                                        secureInput: IsSecureEventInputEnabled(),
+                                        fieldUnchanged: same && now == before,
+                                        elapsed: Date().timeIntervalSince(started))
+            if let stop {
+                if stop == .taken { return true }
+                if watch === watched { giveUp() }
+                return false
+            }
+            // Each try gets the whole wait before the next: a busy page that takes it late must not get two.
+            watch.listen()
+            sendCommandV()
+            if await watch.taken(within: PasteSignal.wait) { return true }
+        }
+    }
+
+    /// The last paste was not taken and is not sent again: the text stays on the clipboard for the user, as
+    /// a copy does, and the user's own clipboard does not go back over it.
+    static func giveUp() {
+        guard let watch = watched else { return }
+        watch.listening = .distantPast
+        watch.restore = nil
+        // Still ours on the clipboard: it becomes a plain copy, as every other 已复制 (no transient mark, so
+        // clipboard managers keep it, and no type that answers for this watch).
+        if NSPasteboard.general.changeCount == watch.changeCount {
+            copy(watch.text)
+        } else {
+            pending.cancel()
+        }
+    }
+
+    /// The app asked for `PasteSignal.type`: it took the text.
+    fileprivate static func taken(_ watch: PasteWatch) {
+        // Only an ask while neoless waits for this paste, with its app in front, is this paste being taken:
+        // not the user's own ⌘V of it later, nor a clipboard tool reading every type.
+        guard !watch.isTaken, Date() < watch.listening,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == watch.pid else { return }
+        watch.isTaken = true
+        if let bundleID = watch.bundleID { learned.insert(bundleID) }
+        release(watch)
+        watch.resume()
+    }
+
+    /// The app has the text: the user's clipboard goes back when it is due, for a paste whose put-back waited.
+    private static func release(_ watch: PasteWatch) {
+        guard watch === watched, let restore = watch.restore else { return }
+        watch.restore = nil
+        let due = max(PasteSignal.restoreAfterTaken, restore.delay - Date().timeIntervalSince(watch.sent))
+        scheduleRestore(restore.token, after: due)
+    }
+
+    /// The user went to another app while the dictation was being worked on: brings `target`, the app the recording
+    /// stopped in, back to the front, so the text still goes where it was dictated (`plan` then checks the field as
+    /// usual). Returns the app to go back to afterwards (`returnTo`), or nil when nothing was switched: the target is
+    /// already in front, it is gone, neoless itself is in front, there is no Accessibility, or it did not come up.
+    static func bringBack(_ target: PasteTarget?) async -> NSRunningApplication? {
+        let own = ProcessInfo.processInfo.processIdentifier
+        guard let target, Permissions.accessibility, let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != target.pid, front.processIdentifier != own,
+              let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated else { return nil }
+        activate(app)
+        for _ in 0..<16 {
+            try? await Task.sleep(for: .milliseconds(50))
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
+                // Let it put its window and focused field back before the field is read.
+                try? await Task.sleep(for: .milliseconds(150))
+                return front
+            }
+        }
+        activate(front)
+        return nil
+    }
+
+    /// Back to the app the user had gone to (`bringBack`), once the paste has reached the target.
+    static func returnTo(_ app: NSRunningApplication) async {
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !app.isTerminated else { return }
+        activate(app)
+    }
+
+    /// `activate()` alone may be refused to a background app (cooperative activation, macOS 14), so Accessibility
+    /// asks too.
+    private static func activate(_ app: NSRunningApplication) {
+        app.activate()
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
+                                     kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+
     /// Puts `text` on the clipboard for the user to paste; it stays there.
     static func copy(_ text: String) {
+        watched = nil
         cancelRestore()
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -233,19 +399,36 @@ enum TextInserter {
         return .after(delay)
     }
 
-    private static func paste(_ text: String, restoreAfter delay: TimeInterval?) {
+    private static func paste(_ text: String, restoreAfter delay: TimeInterval?, watch: PasteWatch? = nil) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
         if delay != nil {
             // Tells clipboard managers not to record this temporary entry.
-            pb.setData(Data(), forType: transientType)
+            item.setData(Data(), forType: transientType)
         }
+        // Asked for only when the app takes the text (`PasteSignal`).
+        if let watch { item.setDataProvider(watch, forTypes: [NSPasteboard.PasteboardType(PasteSignal.type)]) }
+        pb.writeObjects([item])
         let ours = pb.changeCount
+        watch?.changeCount = ours
+        watch?.listen()
+        watched = watch
         sendCommandV()
 
         guard let delay else { return }
         let token = pending.wrote(changeCount: ours)
+        if let watch, watch.confirms {
+            // Put back once the app has the text (`taken`), not on a clock: a page busy with an answer takes it
+            // late, and one that takes none leaves it on the clipboard for the user (`giveUp`).
+            watch.restore = (token, delay)
+            return
+        }
+        scheduleRestore(token, after: delay)
+    }
+
+    private static func scheduleRestore(_ token: Int, after delay: TimeInterval) {
         let work = DispatchWorkItem { MainActor.assumeIsolated { restoreIfDue(token) } }
         restoreWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -349,9 +532,73 @@ private struct FocusReading: @unchecked Sendable {
     let field: FocusedField
     /// Compared with the element marked when the recording stopped.
     let match: FieldMatch
+    /// The focused element itself, nil when it did not answer.
+    var element: AXUIElement?
 
     /// No answer (in time): nothing is known, the paste follows the pid checks alone.
     static let none = FocusReading(owner: nil, field: .unknown, match: .unknown)
+}
+
+/// A paste whose taking is watched (`PasteSignal`): the clipboard offers `PasteSignal.type` through this object,
+/// and the app asks for it only when it takes the text. Main thread only, except the ask itself.
+private final class PasteWatch: NSObject, NSPasteboardItemDataProvider {
+    let pid: pid_t
+    let bundleID: String?
+    /// The dictation, to leave on the clipboard as a plain copy when it is not taken (`giveUp`).
+    let text: String
+    /// Until when an ask counts as this paste being taken: `PasteSignal.wait` after each ⌘V.
+    var listening = Date.distantPast
+    /// The app always asks when it takes a paste (`PasteSignal.confirms`): a paste it does not ask about was not
+    /// taken.
+    let confirms: Bool
+    /// The focused field as read before ⌘V, and how much text it held then (`TextInserter.Plan`).
+    let field: AXUIElement?
+    let length: Int?
+    let sent = Date()
+    /// The pasteboard's changeCount with the dictation on it.
+    var changeCount = 0
+    /// The put-back of the user's clipboard, waiting for the app to take the text: the token `restoreIfDue`
+    /// checks, and how long after ⌘V it was due.
+    var restore: (token: Int, delay: TimeInterval)?
+    var isTaken = false
+    private var waiting: [CheckedContinuation<Bool, Never>] = []
+
+    init(pid: pid_t, bundleID: String?, text: String, confirms: Bool, field: AXUIElement?, length: Int?) {
+        self.pid = pid
+        self.bundleID = bundleID
+        self.text = text
+        self.confirms = confirms
+        self.field = field
+        self.length = length
+    }
+
+    /// A ⌘V is on its way: an ask in the next `PasteSignal.wait` (and a moment for reading the field) is it
+    /// being taken.
+    func listen() { listening = Date().addingTimeInterval(PasteSignal.wait + 1) }
+
+    /// Whether the app takes the text within `seconds` (true at once if it has).
+    @MainActor func taken(within seconds: TimeInterval) async -> Bool {
+        if isTaken { return true }
+        return await withCheckedContinuation { continuation in
+            waiting.append(continuation)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                MainActor.assumeIsolated { self?.resume() }
+            }
+        }
+    }
+
+    /// Tells whoever waits whether the text was taken.
+    @MainActor func resume() {
+        let waiters = waiting
+        waiting = []
+        for waiter in waiters { waiter.resume(returning: isTaken) }
+    }
+
+    /// The app asked for `PasteSignal.type`: it is taking the text. It is given nothing, as when the clipboard
+    /// does not have the type.
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { TextInserter.taken(self) } }
+    }
 }
 
 /// Neoless's own synthetic key events carry this in `eventSourceUserData`.
@@ -391,10 +638,38 @@ private enum FocusProbe {
                 let owner = focusOwner()
                 let element = focusedElement(of: owner ?? pid)
                 once.resume(FocusReading(owner: owner, field: element.map { classify($0, inBrowser: inBrowser) } ?? .unknown,
-                                         match: compare(marked, element)))
+                                         match: compare(marked, element), element: element))
             }
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) { once.resume(.none) }
         }
+    }
+
+    /// How much text `element` holds, nil when it does not say in time.
+    static func length(of element: AXUIElement, timeout: TimeInterval = 0.25) async -> Int? {
+        await withCheckedContinuation { continuation in
+            let once = ResumeOnce<Int?>(continuation)
+            queue.async { once.resume(characters(element)) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) { once.resume(nil) }
+        }
+    }
+
+    /// Whether `field` still has keyboard focus (in the app `pid`, or the one the system says has it), and
+    /// how much text it holds now: false and nil when that cannot be read in time.
+    static func measure(pid: pid_t, field: AXUIElement, timeout: TimeInterval = 0.3) async -> (same: Bool, length: Int?) {
+        await withCheckedContinuation { continuation in
+            let once = ResumeOnce<(same: Bool, length: Int?)>(continuation)
+            queue.async {
+                let same = focusedElement(of: focusOwner() ?? pid).map { CFEqual($0, field) } ?? false
+                once.resume((same, same ? characters(field) : nil))
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) { once.resume((false, nil)) }
+        }
+    }
+
+    /// The field's character count, or its value's length when it does not give one.
+    private static func characters(_ element: AXUIElement) -> Int? {
+        if let count = value(element, kAXNumberOfCharactersAttribute) as? Int { return count }
+        return (value(element, kAXValueAttribute) as? String)?.utf16.count
     }
 
     /// The app that has keyboard focus, nil when the system does not say (or says neoless itself).

@@ -138,6 +138,11 @@ public enum DoneText {
         case InsertResult.copiedNoField.message:
             // Also secure input and no Accessibility: the record's note below says which.
             return ("已复制", "这次没法自动输入，按 ⌘V 粘贴。", true)
+        case InsertResult.copiedWaiting.message:
+            // Until the box takes it (`PasteRetry`), or the user does something first.
+            return ("已复制", "当时不能输入，会自动再试，或按 ⌘V 粘贴。", true)
+        case InsertResult.copiedNotTaken.message:
+            return ("已复制", "输入框当时不让输入，按 ⌘V 粘贴。", true)
         case InsertResult.notInserted.message:
             return ("密码框里不输入", "光标在密码框里，没有输入也没有复制。", false)
         // True before the result arrives and after: it lands below (unless a newer dictation got

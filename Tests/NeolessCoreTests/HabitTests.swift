@@ -291,7 +291,7 @@ extension SwapAndHabitTests {
             #expect(full.hasPrefix(PolishPrompt.staticInstructions(for: mode) + "\n\n# 我的习惯\n"))
             #expect(full.hasSuffix("- " + PolishPrompt.repeatedLine("Cloud", "Claude")))
         }
-        #expect(PolishPrompt.version == "polish-v9")
+        #expect(PolishPrompt.version == "polish-v10")
     }
 }
 

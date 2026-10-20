@@ -60,6 +60,7 @@ FILES=(
     screenshots/settings-model.png screenshots/history.png screenshots/capsule-recording.png
     screenshots/capsule-hold.png screenshots/capsule-polishing.png screenshots/capsule-noted.png
     screenshots/settings-local.png screenshots/how-it-works.svg
+    screenshots/banner.svg screenshots/demo.svg screenshots/features.svg
     scripts/app-id.sh scripts/build-app.sh scripts/hub-deploy.sh scripts/install-mac.sh scripts/make-public.sh
     scripts/make-signing-identity.sh scripts/snapshot.sh scripts/typecheck-ios.sh
 )

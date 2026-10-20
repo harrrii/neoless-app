@@ -195,7 +195,8 @@ final class HubFixture: @unchecked Sendable {
 
     /// - Parameter words: the user's own words, put before the default dictionary (a test about a fix towards
     ///   a dictionary word needs one that is there).
-    init(rateLimit: Int = 1_000, realPolisher: Bool = false, words: [String] = [],
+    /// `quickTidy`: whether short transcripts skip ChatGPT (`HubService.quickTidy`); off, as most tests are about the request.
+    init(rateLimit: Int = 1_000, realPolisher: Bool = false, words: [String] = [], quickTidy: Bool = false,
          now: @escaping () -> Date = Date.init) throws {
         _ = TestLog.shared
         dir = temporaryDirectory()
@@ -203,6 +204,7 @@ final class HubFixture: @unchecked Sendable {
         polisher = StubPolisher()
         service = HubService(folder: folder, asr: asr, polisher: realPolisher ? nil : polisher, rateLimit: rateLimit,
                              now: now)
+        service.quickTidy = quickTidy
         token = try service.devices.pair(name: "iPhone").token
         if !words.isEmpty {
             let before = service.vocabulary

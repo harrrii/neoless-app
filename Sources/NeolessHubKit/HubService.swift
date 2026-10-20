@@ -55,6 +55,10 @@ public final class HubService {
     ///   - asr: the ASR worker client.
     ///   - polisher: ChatGPT; nil uses the hub's own login (`ChatGPTPolisher`).
     ///   - rateLimit: requests per device per minute.
+    /// Short, plain transcripts are tidied here instead of being sent to ChatGPT (`QuickTidy`). Tests about the
+    /// polish request itself turn it off.
+    public var quickTidy = true
+
     public init(folder: HubDataFolder, asr: ASRRecognizing, polisher: HubPolishing? = nil,
                 rateLimit: Int = Hub.requestsPerMinute, now: @escaping () -> Date = Date.init) {
         self.folder = folder
@@ -334,8 +338,14 @@ public final class HubService {
         var text = raw
         var polished = false
         var fallback: HubFallback?
+        var quick = false
         if !raw.isEmpty {
-            if mode.polishes {
+            if mode.polishes, quickTidy, QuickTidy.applies(to: raw) {
+                // Short and plain: tidied here, without the 2.5–4 s a ChatGPT request takes (`QuickTidy`).
+                text = QuickTidy.tidy(words.applyConfirmed(raw), habits: words.habits.items)
+                polished = true
+                quick = true
+            } else if mode.polishes {
                 let polishStart = ContinuousClock.now
                 do {
                     text = try await polisher.polish(raw, mode: mode, appName: about.appName, vocabulary: words.promptWords,
@@ -359,7 +369,7 @@ public final class HubService {
         guard !raw.isEmpty else { return result }
         let entry = HubHistoryEntry(result: result, appName: about.appName, bundleID: about.bundleID, client: about.client,
                                     clientVersion: about.clientVersion, durationSeconds: about.durationSeconds,
-                                    polishModel: polished ? options.model : nil)
+                                    polishModel: polished && !quick ? options.model : nil)
         return history.add(entry).result
     }
 

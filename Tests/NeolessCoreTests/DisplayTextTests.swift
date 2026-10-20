@@ -85,7 +85,8 @@ import Testing
     @Test func doneSubtitlesAreSentencesThatSayWhatToDo() {
         // Every message the controller can show gets a sentence, never the pill's clipped words.
         let results: [InsertResult] = [.pasted, .ownApp, .copiedAppChanged, .copiedFieldChanged, .copiedNoField,
-                                       .copiedSecureInput, .copiedNoAccessibility, .notInserted, .pastedKeptOnClipboard]
+                                       .copiedSecureInput, .copiedNoAccessibility, .notInserted, .pastedKeptOnClipboard,
+                                       .copiedWaiting, .copiedNotTaken]
         let messages = results.map(\.message) + [true, false].map { DoneText.pasteCancelled(keepHistory: $0) }
         for message in messages {
             let line = DoneText.subtitle(message)

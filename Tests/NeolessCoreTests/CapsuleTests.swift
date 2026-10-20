@@ -695,7 +695,8 @@ private func fits(_ s: String) -> Bool {
     /// Every message the controller can show in the capsule comes out whole, on one line.
     @Test func everyRealMessageFitsTheSmallCapsule() {
         let inserts: [InsertResult] = [.pasted, .ownApp, .copiedAppChanged, .copiedFieldChanged, .copiedNoField,
-                                       .copiedSecureInput, .copiedNoAccessibility, .notInserted, .pastedKeptOnClipboard]
+                                       .copiedSecureInput, .copiedNoAccessibility, .notInserted, .pastedKeptOnClipboard,
+                                       .copiedWaiting, .copiedNotTaken]
         let reasons = ["网络中断", "没有网络", "网络超时", "连不上服务器", "安全连接失败", "网络出错", "未登录 ChatGPT",
                        "ChatGPT 登录已过期", "ChatGPT 登录已失效", "ChatGPT 额度暂时用完", "ChatGPT 出错", "整理失败",
                        "整理结果为空", "整理超时", "整理中断"]

@@ -105,12 +105,19 @@ public enum InsertResult: Equatable, Sendable, CaseIterable {
     /// ⌘V was sent, but the user's clipboard could not be kept whole to put back (a private app
     /// format such as Excel cells, or too big): the dictation stays on it. Never from `decide`.
     case pastedKeptOnClipboard
+    /// ⌘V was sent, and the app did not take the text (`PasteSignal`): its input box did not accept any
+    /// then, as a chat page's box does not while its AI is answering. The text is on the clipboard, and is
+    /// sent again once the box takes it (`PasteRetry`). Never from `decide`.
+    case copiedWaiting
+    /// As `copiedWaiting`, where the field could not be read to watch it: only on the clipboard. Never from
+    /// `decide`.
+    case copiedNotTaken
 
     /// Whether the text is on the clipboard for the user afterwards.
     public var isCopied: Bool {
         switch self {
         case .copiedAppChanged, .copiedFieldChanged, .copiedNoField, .copiedSecureInput, .copiedNoAccessibility,
-             .pastedKeptOnClipboard: return true
+             .pastedKeptOnClipboard, .copiedWaiting, .copiedNotTaken: return true
         case .pasted, .ownApp, .notInserted: return false
         }
     }
@@ -120,7 +127,8 @@ public enum InsertResult: Equatable, Sendable, CaseIterable {
         case .pasted, .pastedKeptOnClipboard: return .pasted
         case .ownApp: return .inApp
         case .notInserted: return .notInserted
-        case .copiedAppChanged, .copiedFieldChanged, .copiedNoField, .copiedSecureInput, .copiedNoAccessibility:
+        case .copiedAppChanged, .copiedFieldChanged, .copiedNoField, .copiedSecureInput, .copiedNoAccessibility,
+             .copiedWaiting, .copiedNotTaken:
             return .copied
         }
     }
@@ -135,6 +143,8 @@ public enum InsertResult: Equatable, Sendable, CaseIterable {
         case .copiedFieldChanged: return "已复制（输入框已切换），⌘V 粘贴"
         case .copiedNoField, .copiedSecureInput, .copiedNoAccessibility: return "已复制，按 ⌘V 粘贴"
         case .notInserted: return "密码框里不输入，结果在 neoless"
+        case .copiedWaiting: return "已复制，会自动再试"
+        case .copiedNotTaken: return "已复制（输入框没接住），⌘V 粘贴"
         }
     }
 
@@ -150,7 +160,106 @@ public enum InsertResult: Equatable, Sendable, CaseIterable {
         case .copiedSecureInput: return "有应用开着“安全键盘输入”，只复制了"
         case .copiedNoAccessibility: return "没有辅助功能权限，只复制了"
         case .notInserted: return "光标在密码框里，没有输入也没有复制"
+        case .copiedWaiting: return "输入框当时不让输入，文字留在剪贴板里"
+        case .copiedNotTaken: return "输入框当时不让输入，只复制了"
         }
+    }
+}
+
+/// Whether an app took a paste, from what it reads off the clipboard. A Chromium page (Chrome and the other
+/// Chromium browsers, and Electron apps such as Claude) reads where the text came from (`type`) every time it
+/// takes a paste, and never when ⌘V finds nothing there that takes text: a chat page's input box while its AI
+/// is answering, which still reads as an ordinary text field and quietly drops the text (seen in Chrome,
+/// 2026-10). Offered lazily on the clipboard, that type tells neoless the moment the text was taken.
+public enum PasteSignal {
+    /// Chromium's "where the data came from" type. Asked for, it gets nothing: the same as a clipboard
+    /// without it.
+    public static let type = "org.chromium.source-url"
+    /// How long after ⌘V the app has to take the text before it counts as not taken, and how long each
+    /// later try is given before the next. A paste is taken within some 50 ms (so this costs a normal paste
+    /// nothing); a page busy rendering an answer took one 2.4 s late, and a try sent before that one landed
+    /// would have pasted the text twice.
+    public static let wait: TimeInterval = 3
+    /// The user's clipboard goes back at the earliest this long after the app took the text.
+    public static let restoreAfterTaken: TimeInterval = 0.3
+    /// Seen to ask on every paste (Chrome and Claude, 2026-10). Other Chromium and Electron apps count once
+    /// one of their pastes was seen taken this way (`confirms`).
+    static let seen: Set<String> = [
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "com.anthropic.claudefordesktop",
+    ]
+
+    /// Whether the type is offered to the app: Chromium browsers and Electron apps (not the code editors, whose
+    /// own paste handling was never looked at).
+    public static func offers(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return WebAccessibility.chromium.contains(bundleID) || WebAccessibility.electron.contains(bundleID)
+    }
+
+    /// Whether a paste the app did not ask about within `wait` was not taken: an app seen to ask on every
+    /// paste, here (`seen`) or since launch (`learned`).
+    public static func confirms(bundleID: String?, learned: Set<String>) -> Bool {
+        guard let bundleID, offers(bundleID: bundleID) else { return false }
+        return seen.contains(bundleID) || learned.contains(bundleID)
+    }
+}
+
+/// What became of a paste, `PasteSignal.wait` after ⌘V.
+public enum PasteCheck: Equatable, Sendable {
+    /// The app took the text.
+    case taken
+    /// Not taken: the field it went to holds what it held. `retries`: it can be watched and the text sent
+    /// again once it takes it (`PasteRetry`).
+    case notTaken(retries: Bool)
+    /// Nothing known (an app that does not say, a field that could not be read, or one that changed some
+    /// other way): as it always was.
+    case unknown
+
+    /// `signaled`: the app asked (`PasteSignal`). `confirms`: it always asks when it takes a paste into a page.
+    /// `before`, `now`: how much text the focused field held just before ⌘V and now (nil: not read);
+    /// `sameField`: the field read now is the one read before; `inserted`: the text's length.
+    public static func judge(signaled: Bool, confirms: Bool, before: Int?, now: Int?, sameField: Bool,
+                             inserted: Int) -> PasteCheck {
+        if signaled { return .taken }
+        guard confirms, let before, let now, sameField else { return .unknown }
+        if now == before { return .notTaken(retries: true) }
+        // Grown by about the text without asking: a field that takes text another way (Chrome's address
+        // bar). Changed by less (the user typing meanwhile): nothing known.
+        return now - before >= max(1, inserted / 2) ? .taken : .unknown
+    }
+}
+
+/// A paste the app did not take (`PasteCheck.notTaken`) is sent again once the input box takes text, for a
+/// chat page whose box takes none while its AI is answering: ⌘V again every `interval`, for at most `limit`,
+/// while the same field has focus and holds what it held, and nothing else happened. Anything the user does
+/// (a key, a click), another app in front, a changed clipboard or secure input stops it; the text then stays
+/// on the clipboard, as for any copy.
+public enum PasteRetry {
+    public static let interval: TimeInterval = 1.0
+    /// Long enough for an AI to finish a long answer.
+    public static let limit: TimeInterval = 120
+    /// The record's note once a later try was taken, in place of `InsertResult.copiedWaiting.detail`.
+    public static let takenLater = "输入框起初不让输入，可用后自动输入了"
+
+    public enum Stop: Equatable, Sendable {
+        case taken, cancelled, userActed, appChanged, clipboardChanged, secureInput, fieldChanged, timedOut
+    }
+
+    /// Before a try: nil to send ⌘V again, or why it stops. `fieldUnchanged`: the field the dictation was
+    /// pasted into still has focus and holds as much text as it did then (false when that cannot be read:
+    /// nothing is sent blind).
+    public static func check(taken: Bool, cancelled: Bool, userActed: Bool, frontmostIsTarget: Bool,
+                             clipboardOurs: Bool, secureInput: Bool, fieldUnchanged: Bool,
+                             elapsed: TimeInterval) -> Stop? {
+        if taken { return .taken }
+        if cancelled { return .cancelled }
+        if userActed { return .userActed }
+        if !frontmostIsTarget { return .appChanged }
+        if !clipboardOurs { return .clipboardChanged }
+        if secureInput { return .secureInput }
+        if !fieldUnchanged { return .fieldChanged }
+        if elapsed >= limit { return .timedOut }
+        return nil
     }
 }
 

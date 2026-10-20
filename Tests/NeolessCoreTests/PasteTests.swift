@@ -449,3 +449,95 @@ private struct Board {
         #expect(PasteKey.keyCode { _ in "ж" } == 9)
     }
 }
+
+/// A chat page's input box takes no text while its AI is answering: ⌘V is sent and nothing happens. Chromium
+/// apps say when they take a paste (`PasteSignal`), so neoless can tell, keep the text, and send it again.
+@Suite struct PasteTakenTests {
+    @Test func aPasteNotTakenIsACopyThatSaysWhatHappens() {
+        for r in [InsertResult.copiedWaiting, .copiedNotTaken] {
+            #expect(r.delivery == .copied && r.isCopied)
+            #expect(r.message.hasPrefix("已复制") && r.message.count <= 18)
+            #expect(r.detail?.contains("不让输入") == true)
+            #expect(DoneText.headline(r.message) == "已复制")
+            #expect(DoneText.subtitle(r.message).contains("⌘V"))
+            #expect(CapsuleText.kind(done: r.message) == .copied)
+        }
+        // Only the one that is sent again says so.
+        #expect(InsertResult.copiedWaiting.message.contains("自动"))
+        #expect(DoneText.subtitle(InsertResult.copiedWaiting.message).contains("自动"))
+        #expect(!InsertResult.copiedNotTaken.message.contains("自动"))
+        #expect(!DoneText.subtitle(InsertResult.copiedNotTaken.message).contains("自动"))
+        // Taken later: the record's note says so instead.
+        #expect(PasteRetry.takenLater.count <= 24 && !PasteRetry.takenLater.hasSuffix("。"))
+    }
+
+    @Test func onlyChromiumAndElectronAppsAreAsked() {
+        #expect(PasteSignal.offers(bundleID: "com.google.Chrome"))
+        #expect(PasteSignal.offers(bundleID: "com.microsoft.edgemac"))
+        #expect(PasteSignal.offers(bundleID: "com.anthropic.claudefordesktop"))
+        #expect(!PasteSignal.offers(bundleID: "com.microsoft.VSCode"))
+        #expect(!PasteSignal.offers(bundleID: "com.apple.Safari"))
+        #expect(!PasteSignal.offers(bundleID: "com.apple.TextEdit"))
+        #expect(!PasteSignal.offers(bundleID: nil))
+    }
+
+    @Test func aMissingAskCountsOnlyForAppsSeenAsking() {
+        // Seen in Chrome and Claude: every paste they take, they ask.
+        #expect(PasteSignal.confirms(bundleID: "com.google.Chrome", learned: []))
+        #expect(PasteSignal.confirms(bundleID: "com.anthropic.claudefordesktop", learned: []))
+        // Another Chromium app counts once one of its pastes was seen asking.
+        #expect(!PasteSignal.confirms(bundleID: "com.brave.Browser", learned: []))
+        #expect(PasteSignal.confirms(bundleID: "com.brave.Browser", learned: ["com.brave.Browser"]))
+        // Never for an app that is not asked at all.
+        #expect(!PasteSignal.confirms(bundleID: "com.apple.Safari", learned: ["com.apple.Safari"]))
+        #expect(!PasteSignal.confirms(bundleID: nil, learned: []))
+    }
+
+    @Test func theAskDecidesAndTheFieldOnlyBacksItUp() {
+        func judge(_ signaled: Bool, confirms: Bool = true, _ before: Int?, _ now: Int?, same: Bool = true) -> PasteCheck {
+            PasteCheck.judge(signaled: signaled, confirms: confirms, before: before, now: now, sameField: same, inserted: 20)
+        }
+        // Asked: taken, whatever the field says.
+        #expect(judge(true, 5, 5) == .taken)
+        // An app that does not say: nothing known, as before.
+        #expect(judge(false, confirms: false, 5, 5) == .unknown)
+        // Not asked, and the same field holds what it held: not taken, and it can be watched.
+        #expect(judge(false, 5, 5) == .notTaken(retries: true))
+        #expect(judge(false, 0, 0) == .notTaken(retries: true))
+        // Grown by about the text without asking (Chrome's address bar): taken.
+        #expect(judge(false, 5, 25) == .taken)
+        // Grown by a little (the user typing meanwhile): nothing known.
+        #expect(judge(false, 5, 7) == .unknown)
+        // Nothing to compare, or another field: nothing known, so nothing is held back or sent again.
+        #expect(judge(false, nil, 5) == .unknown)
+        #expect(judge(false, 5, nil, same: false) == .unknown)
+        #expect(judge(false, 5, 5, same: false) == .unknown)
+    }
+
+    func check(taken: Bool = false, cancelled: Bool = false, userActed: Bool = false, front: Bool = true,
+               ours: Bool = true, secure: Bool = false, unchanged: Bool = true, elapsed: TimeInterval = 3) -> PasteRetry.Stop? {
+        PasteRetry.check(taken: taken, cancelled: cancelled, userActed: userActed, frontmostIsTarget: front,
+                         clipboardOurs: ours, secureInput: secure, fieldUnchanged: unchanged, elapsed: elapsed)
+    }
+
+    @Test func triesAgainOnlyWhileNothingElseHappened() {
+        #expect(check() == nil)
+        #expect(check(taken: true) == .taken)
+        // Taken counts first: the last try landed, whatever came after it.
+        #expect(check(taken: true, userActed: true, front: false) == .taken)
+        #expect(check(cancelled: true) == .cancelled)
+        // The user typed or clicked: they took over, nothing more is sent.
+        #expect(check(userActed: true) == .userActed)
+        #expect(check(front: false) == .appChanged)
+        // The user copied something: their clipboard is never pasted.
+        #expect(check(ours: false) == .clipboardChanged)
+        #expect(check(secure: true) == .secureInput)
+        // Another field, or this one holds something else now (or cannot be read): nothing is sent blind.
+        #expect(check(unchanged: false) == .fieldChanged)
+        #expect(check(elapsed: PasteRetry.limit - 1) == nil)
+        #expect(check(elapsed: PasteRetry.limit) == .timedOut)
+        // Long enough for an AI to finish a long answer, and tried often enough to land soon after.
+        #expect(PasteRetry.limit >= 60 && PasteRetry.interval <= 1)
+        #expect(PasteSignal.wait >= 2.5 && PasteSignal.wait <= 4)
+    }
+}

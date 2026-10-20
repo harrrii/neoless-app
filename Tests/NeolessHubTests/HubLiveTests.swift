@@ -150,6 +150,7 @@ final class Box<T>: @unchecked Sendable {
         try await stubWorker(secret: { secret }, record: record, text: "嗯我的 I phone 坏了").test(.live) { workerClient in
             let worker = ASRWorkerClient(baseURL: URL(string: "http://localhost:\(workerClient.port!)")!, secret: source)
             let service = await HubService(folder: folder, asr: worker, polisher: polisher)
+            await MainActor.run { service.quickTidy = false }
             let token = try await service.devices.pair(name: "Mac").token
             let app = Application(router: HubServer.router(service: service),
                                   configuration: .init(address: .hostname("127.0.0.1", port: 0)))

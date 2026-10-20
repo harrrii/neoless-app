@@ -132,6 +132,9 @@ final class DictationController: ObservableObject {
     private var hubPingFailures: [UUID: HubError] = [:]
     /// When the Neo is next asked to get its speech model ready (`warmHub`).
     private var warmGate = HubWarmGate()
+    /// The last text an app did not take (`InsertResult.copiedWaiting`), sent again once its input box takes
+    /// text (`TextInserter.keepTrying`). The next dictation stops it.
+    private var retry: Task<Void, Never>?
 
     init(settings: AppSettings, history: HistoryStore, vocabulary: VocabularyStore, account: ChatGPTAccount,
          learning: LearningStore, hub: HubConnection? = nil, usage: UsageStore? = nil) {
@@ -442,6 +445,9 @@ final class DictationController: ObservableObject {
         session = id
         work?.cancel()
         work = nil
+        // The text the last app did not take is not sent again into the middle of this one.
+        retry?.cancel()
+        retry = nil
         failure = nil
         let front = NSWorkspace.shared.frontmostApplication
         let own = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
@@ -769,8 +775,15 @@ final class DictationController: ObservableObject {
         var polishSeconds: TimeInterval?
         var notes = take.notes
         var reason: String?
+        var quick = false
 
-        if mode.polishes {
+        if mode.polishes, QuickTidy.applies(to: raw) {
+            // Short and plain: tidied here, without the 2.5–4 s a ChatGPT request takes (`QuickTidy`).
+            let text = QuickTidy.tidy(learning.applyConfirmed(raw), habits: learning.habits)
+            polished = text
+            final = text
+            quick = true
+        } else if mode.polishes {
             if session == id { set(.polishing) }
             let started = Date()
             do {
@@ -792,7 +805,7 @@ final class DictationController: ObservableObject {
         // Typed as is (原样转写, or the original after a failed polish): apply what the user confirmed.
         if polished == nil { final = learning.applyConfirmed(raw) }
         await typeAndKeep(Produced(raw: raw, final: final, polished: polished, polishSeconds: polishSeconds,
-                            model: polished == nil ? nil : settings.model, mode: mode, reason: reason,
+                            model: polished == nil || quick ? nil : settings.model, mode: mode, reason: reason,
                             timings: DictationTimings(neoWaitMs: neoWaitMs)),
                    notes: notes, duration: duration, take: take)
     }
@@ -805,6 +818,10 @@ final class DictationController: ObservableObject {
         var delivery = Delivery.notInserted
         var message = ""
         var capture = CorrectionObserver.Capture.skip
+        // Not taken, in a field that can be watched: sent again once it takes text (`waitForField`).
+        var retries = false
+        // Gone to another app while waiting: the text still goes where it was dictated, then back (`bringBack`).
+        let cameFrom = session == id ? await TextInserter.bringBack(take.pasteTarget) : nil
         if session == id {
             capture = await observer.capture(inserting: final)
         }
@@ -813,15 +830,31 @@ final class DictationController: ObservableObject {
             let plan = await TextInserter.plan(for: take.pasteTarget, since: mark, restoreClipboard: settings.restoreClipboard)
             // Esc may have come while planning: then nothing is pasted.
             if session == id {
-                let inserted = TextInserter.perform(plan, text: final)
+                var inserted = TextInserter.perform(plan, text: final, confirming: true)
+                // The app says whether it took the text: a chat page's input box takes none while its AI is
+                // answering, and ⌘V then changes nothing at all.
+                if inserted.delivery == .pasted, case .notTaken(let watchable) = await TextInserter.confirm() {
+                    // Not after `bringBack`: the user is taken back to the app they went to.
+                    retries = watchable && cameFrom == nil
+                    inserted = retries ? .copiedWaiting : .copiedNotTaken
+                    if !retries { TextInserter.giveUp() }
+                }
                 delivery = inserted.delivery
                 message = inserted.message
                 if let detail = inserted.detail { notes.append(detail) }
             }
         }
-        guard keeps(id) else { return }
+        if let cameFrom { await TextInserter.returnTo(cameFrom) }
+        guard keeps(id) else {
+            if retries { TextInserter.giveUp() }
+            return
+        }
         let pastedLive = session == id
         if !pastedLive { notes.append(RecordNote.pasteCancelled) }
+        if retries, !pastedLive {
+            TextInserter.giveUp()
+            retries = false
+        }
         if let reason = produced.reason {
             message = delivery == .pasted ? FailureText.typedRaw(reason: reason) : "\(message) · \(reason)"
         }
@@ -849,6 +882,46 @@ final class DictationController: ObservableObject {
             show(record)
         }
         finished(id, .done(message))
+        if retries { waitForField(record, capture: capture, appName: take.appName, reason: produced.reason) }
+    }
+
+    /// The app did not take the text (`InsertResult.copiedWaiting`): it is sent again once the input box takes
+    /// it (`TextInserter.keepTrying`; the next dictation stops that). Taken, the record says so, and with
+    /// nothing newer under way the capsule and the window say 已输入 and the user's fixes are watched, as after
+    /// any paste.
+    /// The menu's 重新输入上一条: what waits to be sent again must not land as well.
+    func stopRetrying() {
+        retry?.cancel()
+        retry = nil
+    }
+
+    private func waitForField(_ record: DictationRecord, capture: CorrectionObserver.Capture, appName: String?,
+                              reason: String?) {
+        retry?.cancel()
+        retry = Task { [weak self] in
+            // Taken even if a new dictation began in the same moment: the record still says so.
+            guard await TextInserter.keepTrying(), let self else { return }
+            if !Task.isCancelled { self.retry = nil }
+            self.takenLater(record, capture: capture, appName: appName, reason: reason)
+        }
+    }
+
+    /// `reason`: why the text is not polished, as when it was first delivered.
+    private func takenLater(_ record: DictationRecord, capture: CorrectionObserver.Capture, appName: String?,
+                            reason: String?) {
+        func taken(_ kept: DictationRecord) -> DictationRecord {
+            var kept = kept
+            kept.delivery = .pasted
+            let parts = RecordNote.parts(kept.note).map { $0 == InsertResult.copiedWaiting.detail ? PasteRetry.takenLater : $0 }
+            kept.note = parts.isEmpty ? nil : parts.joined(separator: "；")
+            return kept
+        }
+        if let kept = history.records.first(where: { $0.id == record.id }) { history.update(taken(kept)) }
+        guard let shown = current, shown.id == record.id else { return }
+        current = taken(shown)
+        guard !flow.isCapturing, !phase.isActive else { return }
+        set(.done(reason.map(FailureText.typedRaw(reason:)) ?? InsertResult.pasted.message))
+        observer.begin(capture, inserted: record.finalText, recordID: record.id, appName: appName)
     }
 
     // MARK: 用 Neo 处理

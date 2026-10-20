@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc"
+     font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">说的话和 neoless 打出来的文字</title>
+  <desc id="desc">两个编的例子。第一句：嗯，那个，明天下午三点，不对，四点跟 Martin 开个会，讨论一下 open air 的订阅，预算按五乘五百算。打出来：明天下午 4 点跟 Martin 开个会，讨论一下 OpenAI 的订阅，预算按 5*500 算。第二句：帮我改三个地方，第一个标题改大一点，第二个那个按钮换成蓝色，呃，第三个把底部的年份更新一下。打出来的是一句引子加三条编号的要求。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F8FAFF"/>
+      <stop offset="1" stop-color="#EEF3FF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B8BFF"/>
+      <stop offset="1" stop-color="#1463F3"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#1E3A8A" flood-opacity="0.10"/>
+    </filter>
+    <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1463F3"/>
+    </marker>
+  </defs>
+
+  <!-- Its own light background, so the picture reads the same in a dark page. -->
+  <rect width="1200" height="600" rx="28" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="598.5" rx="27.25" fill="none" stroke="#DCE5F5" stroke-width="1.5"/>
+
+  <text x="56" y="62" font-size="15" font-weight="600" fill="#64748B" letter-spacing="1">你说的</text>
+  <text x="664" y="62" font-size="15" font-weight="600" fill="#1463F3" letter-spacing="1">neoless 打出来的</text>
+
+  <!-- Example 1 -->
+  <rect x="48" y="82" width="512" height="168" rx="20" fill="#FFFFFF" fill-opacity="0.65" stroke="#DCE3EE" stroke-width="1.5"/>
+  <text font-size="18" fill="#64748B">
+    <tspan x="76" y="124"><tspan fill="#94A3B8">嗯，那个，</tspan>明天下午<tspan fill="#94A3B8">三点，不对，</tspan>四点跟</tspan>
+    <tspan x="76" y="156">Martin 开个会，讨论一下 <tspan fill="#94A3B8">open air</tspan> 的</tspan>
+    <tspan x="76" y="188">订阅，预算按五乘五百算。</tspan>
+  </text>
+
+  <line x1="574" y1="166" x2="642" y2="166" stroke="#1463F3" stroke-width="3" stroke-linecap="round" marker-end="url(#head)"/>
+
+  <rect x="656" y="82" width="496" height="168" rx="20" fill="#FFFFFF" filter="url(#shadow)"/>
+  <rect x="656" y="82" width="6" height="168" rx="3" fill="url(#accent)"/>
+  <text font-size="19" fill="#0F172A">
+    <tspan x="688" y="132">明天下午 <tspan font-weight="700" fill="#1463F3">4 点</tspan>跟 Martin 开个会，讨论一下</tspan>
+    <tspan x="688" y="166"><tspan font-weight="700" fill="#1463F3">OpenAI</tspan> 的订阅，预算按 <tspan font-weight="700" fill="#1463F3">5*500</tspan> 算。</tspan>
+  </text>
+
+  <g font-size="13" fill="#3B5B8C">
+    <rect x="688" y="196" width="104" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="740" y="216" text-anchor="middle">去掉口头禅</text>
+    <rect x="802" y="196" width="104" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="854" y="216" text-anchor="middle">改口取后者</text>
+    <rect x="916" y="196" width="104" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="968" y="216" text-anchor="middle">词典纠错</text>
+    <rect x="1030" y="196" width="94" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="1077" y="216" text-anchor="middle">算式</text>
+  </g>
+
+  <!-- Example 2 -->
+  <rect x="48" y="282" width="512" height="268" rx="20" fill="#FFFFFF" fill-opacity="0.65" stroke="#DCE3EE" stroke-width="1.5"/>
+  <text font-size="18" fill="#64748B">
+    <tspan x="76" y="324">帮我改三个地方，第一个标题改大一点，</tspan>
+    <tspan x="76" y="356">第二个<tspan fill="#94A3B8">那个</tspan>按钮换成蓝色，<tspan fill="#94A3B8">呃，</tspan>第三个把</tspan>
+    <tspan x="76" y="388">底部的年份更新一下。</tspan>
+  </text>
+
+  <line x1="574" y1="416" x2="642" y2="416" stroke="#1463F3" stroke-width="3" stroke-linecap="round" marker-end="url(#head)"/>
+
+  <rect x="656" y="282" width="496" height="268" rx="20" fill="#FFFFFF" filter="url(#shadow)"/>
+  <rect x="656" y="282" width="6" height="268" rx="3" fill="url(#accent)"/>
+  <text font-size="19" fill="#0F172A">
+    <tspan x="688" y="330">帮我改三个地方：</tspan>
+    <tspan x="688" y="368"><tspan font-weight="700" fill="#1463F3">1.</tspan> 标题改大一点。</tspan>
+    <tspan x="688" y="404"><tspan font-weight="700" fill="#1463F3">2.</tspan> 按钮换成蓝色。</tspan>
+    <tspan x="688" y="440"><tspan font-weight="700" fill="#1463F3">3.</tspan> 底部的年份更新一下。</tspan>
+  </text>
+
+  <g font-size="13" fill="#3B5B8C">
+    <rect x="688" y="490" width="104" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="740" y="510" text-anchor="middle">自动分条</text>
+    <rect x="802" y="490" width="104" height="30" rx="15" fill="#EAF1FF"/>
+    <text x="854" y="510" text-anchor="middle">只整理不回答</text>
+  </g>
+
+  <text x="600" y="584" font-size="12" fill="#94A3B8" text-anchor="middle">两个例子都是编的</text>
+</svg>

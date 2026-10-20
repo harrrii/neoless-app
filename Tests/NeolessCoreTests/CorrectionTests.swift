@@ -463,6 +463,6 @@ let reviewRows: [CorrectionRow] = [
                 + "用户以前的纠正（从用户自己的修改中学到；语境相符时才改，不符就保留原词）：\n- Open Air → OpenAI\n- 金币 → 硬币")
         // The words are in the instructions only, never again in the user message.
         #expect(PolishPrompt.userMessage(transcript: "看看金币", appName: "Mail") == "当前应用：Mail\n\n<逐字稿>\n看看金币\n</逐字稿>")
-        #expect(PolishPrompt.version == "polish-v9")
+        #expect(PolishPrompt.version == "polish-v10")
     }
 }

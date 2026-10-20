@@ -189,6 +189,37 @@ import Testing
         #expect(saved.result == result && saved.client == .ios && saved.appName == "备忘录" && saved.clientVersion == "1.2.0")
     }
 
+    @Test func aShortDictationIsTidiedWithoutChatGPT() async throws {
+        let hub = try HubFixture(quickTidy: true)
+        hub.asr.reply = .text("嗯好的马上到")
+        let result = try decode(DictationResult.self, try await hub.dictate(dictation(local: "好的马上到")))
+        #expect(result.raw == "嗯好的马上到")
+        #expect(result.text == "好的马上到")
+        #expect(result.polished && result.fallback == nil)
+        #expect(hub.polisher.calls.isEmpty)
+        #expect(hub.service.history.entry(id: result.id)?.polishModel == nil)
+    }
+
+    @Test func aShortDictationMakesASwapHabitHereWithoutChatGPT() async throws {
+        let hub = try HubFixture(quickTidy: true)
+        hub.asr.reply = .text("应该是这个吧。")
+        func habits(_ items: [String]) async throws {
+            let update = HabitsUpdate(items: items, expectedRevision: nil)
+            #expect(try await hub.send(.put, HubPath.habits, body: try json(update)).status == .ok)
+        }
+
+        try await habits(["把所有的吧换成“罢”"])
+        let swapped = try decode(DictationResult.self, try await hub.dictate(dictation(local: "应该是这个吧")))
+        #expect(swapped.text == "应该是这个罢。" && swapped.polished)
+        #expect(hub.polisher.calls.isEmpty)
+
+        // A habit only the model can follow does not slow a short sentence down: it is left to longer ones.
+        try await habits(["微信里句末不要句号", "把所有的吧换成“罢”"])
+        let quick = try decode(DictationResult.self, try await hub.dictate(dictation(local: "应该是这个吧")))
+        #expect(quick.text == "应该是这个罢。" && hub.polisher.calls.isEmpty)
+        #expect(hub.service.history.entry(id: quick.id)?.polishModel == nil)
+    }
+
     @Test(arguments: [HubAudioType.wav, .caf, .m4a])
     func everyUploadTypeDecodes(_ type: HubAudioType) async throws {
         let hub = try HubFixture()

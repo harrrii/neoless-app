@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="440" viewBox="0 0 1280 440" role="img" aria-labelledby="title desc"
+     font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">neoless</title>
+  <desc id="desc">neoless：按一下 fn 说话，整理好的文字出现在光标处。右边是录音时屏幕底部的小黑条，和刚打出来的一句话。</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1B3F"/>
+      <stop offset="0.55" stop-color="#0F2F7A"/>
+      <stop offset="1" stop-color="#1A56DB"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.78" cy="0.3" r="0.6">
+      <stop offset="0" stop-color="#60A5FA" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#60A5FA" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.1" cy="1" r="0.5">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DDE7F7"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3B8BFF"/>
+      <stop offset="1" stop-color="#1160F2"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#FFFFFF" fill-opacity="0.07"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="440" rx="28" fill="url(#sky)"/>
+  <rect width="1280" height="440" rx="28" fill="url(#dots)"/>
+  <rect width="1280" height="440" rx="28" fill="url(#glow)"/>
+  <rect width="1280" height="440" rx="28" fill="url(#glow2)"/>
+
+  <!-- The app icon: a blue n-wave on a white tile -->
+  <g transform="translate(84 92)" filter="url(#lift)">
+    <rect width="132" height="132" rx="32" fill="url(#tile)"/>
+    <path d="M38 96 V54 C38 30 66 28 74 52 L84 82 C90 100 106 100 106 80 V66" fill="none" stroke="url(#wave)"
+          stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="84" y="306" font-size="76" font-weight="800" fill="#FFFFFF" letter-spacing="-1.5">neoless</text>
+  <text x="88" y="350" font-size="25" font-weight="500" fill="#C7D7FE">按一下 fn 说话，整理好的文字出现在光标处。</text>
+  <text x="88" y="388" font-size="17" fill="#93A9DA">为中文夹英文而做的 Mac 语音输入 · 录音只交给你自己的 Mac</text>
+
+  <!-- A text field that has just been typed into -->
+  <g transform="translate(676 96)">
+    <rect width="520" height="168" rx="20" fill="#FFFFFF" fill-opacity="0.96" filter="url(#lift)"/>
+    <circle cx="28" cy="26" r="6" fill="#FF5F57"/>
+    <circle cx="48" cy="26" r="6" fill="#FEBC2E"/>
+    <circle cx="68" cy="26" r="6" fill="#28C840"/>
+    <text x="260" y="31" font-size="13" fill="#94A3B8" text-anchor="middle">发给 Claude</text>
+    <line x1="0" y1="48" x2="520" y2="48" stroke="#E2E8F0"/>
+    <text font-size="19" fill="#0F172A">
+      <tspan x="28" y="90">明天下午 4 点跟 Martin 开个会，讨论一下</tspan>
+      <tspan x="28" y="124">OpenAI 的订阅，预算按 5*500 算。</tspan>
+    </text>
+    <rect x="320" y="106" width="2.5" height="24" rx="1.25" fill="#1463F3"/>
+  </g>
+
+  <!-- The recording capsule, as it sits at the bottom of the screen -->
+  <g transform="translate(786 300)" filter="url(#lift)">
+    <rect width="300" height="56" rx="28" fill="#0A0A0B"/>
+    <rect x="0.5" y="0.5" width="299" height="55" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <circle cx="30" cy="28" r="14" fill="#2A2A2E"/>
+    <path d="M25 23 L35 33 M35 23 L25 33" stroke="#D4D4D8" stroke-width="2.2" stroke-linecap="round"/>
+    <g fill="#FFFFFF" transform="translate(66 28)">
+      <rect x="0" y="-4" width="5" height="8" rx="2.5"/>
+      <rect x="11" y="-9" width="5" height="18" rx="2.5"/>
+      <rect x="22" y="-15" width="5" height="30" rx="2.5"/>
+      <rect x="33" y="-7" width="5" height="14" rx="2.5"/>
+      <rect x="44" y="-12" width="5" height="24" rx="2.5"/>
+      <rect x="55" y="-18" width="5" height="36" rx="2.5"/>
+      <rect x="66" y="-10" width="5" height="20" rx="2.5"/>
+      <rect x="77" y="-14" width="5" height="28" rx="2.5"/>
+      <rect x="88" y="-6" width="5" height="12" rx="2.5"/>
+      <rect x="99" y="-11" width="5" height="22" rx="2.5"/>
+      <rect x="110" y="-16" width="5" height="32" rx="2.5"/>
+      <rect x="121" y="-8" width="5" height="16" rx="2.5"/>
+      <rect x="132" y="-12" width="5" height="24" rx="2.5"/>
+      <rect x="143" y="-5" width="5" height="10" rx="2.5"/>
+      <rect x="154" y="-9" width="5" height="18" rx="2.5"/>
+      <rect x="165" y="-4" width="5" height="8" rx="2.5"/>
+    </g>
+    <circle cx="270" cy="28" r="14" fill="#1463F3"/>
+    <path d="M263.5 28.5 L268 33 L277 23.5" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- The fn key -->
+  <g transform="translate(676 300)" filter="url(#lift)">
+    <rect width="86" height="56" rx="12" fill="#1E293B"/>
+    <rect x="0.5" y="0.5" width="85" height="55" rx="11.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.14"/>
+    <circle cx="27" cy="28" r="9" fill="none" stroke="#E2E8F0" stroke-width="1.8"/>
+    <path d="M18 28 H36 M27 19 C22 24 22 32 27 37 M27 19 C32 24 32 32 27 37" fill="none" stroke="#E2E8F0" stroke-width="1.5"/>
+    <text x="58" y="34" font-size="18" font-weight="600" fill="#E2E8F0" text-anchor="middle">fn</text>
+  </g>
+</svg>

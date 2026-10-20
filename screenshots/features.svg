@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc"
+     font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="title">neoless 能做什么</title>
+  <desc id="desc">六张卡片：任何应用里都能用；整理而不是逐字照抄；从你的修改里学；短句几乎即时；录音留在自己的机器上；念的数字和算式直接打成数字。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F8FAFF"/>
+      <stop offset="1" stop-color="#EEF3FF"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B8BFF"/>
+      <stop offset="1" stop-color="#1160F2"/>
+    </linearGradient>
+    <filter id="card" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#1E3A8A" flood-opacity="0.08"/>
+    </filter>
+    <g id="frame">
+      <rect width="352" height="224" rx="22" fill="#FFFFFF" filter="url(#card)"/>
+      <rect x="0.75" y="0.75" width="350.5" height="222.5" rx="21.25" fill="none" stroke="#E3E9F5" stroke-width="1.5"/>
+      <rect x="28" y="28" width="52" height="52" rx="15" fill="url(#badge)"/>
+    </g>
+  </defs>
+
+  <rect width="1200" height="560" rx="28" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="558.5" rx="27.25" fill="none" stroke="#DCE5F5" stroke-width="1.5"/>
+
+  <!-- 1. Any app -->
+  <g transform="translate(40 40)">
+    <use href="#frame"/>
+    <g fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linejoin="round">
+      <rect x="40" y="42" width="11" height="11" rx="3"/><rect x="57" y="42" width="11" height="11" rx="3"/>
+      <rect x="40" y="59" width="11" height="11" rx="3"/><rect x="57" y="59" width="11" height="11" rx="3" fill="#FFFFFF"/>
+    </g>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">哪个应用都能用</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">微信、Claude、浏览器、终端……</tspan><tspan x="28" y="182">文字打在你说完时的光标处，</tspan><tspan x="28" y="204">剪贴板用完放回原样。</tspan></text>
+  </g>
+
+  <!-- 2. Tidy, not transcribe -->
+  <g transform="translate(424 40)">
+    <use href="#frame"/>
+    <g stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round">
+      <line x1="41" y1="45" x2="67" y2="45"/><line x1="41" y1="54" x2="61" y2="54"/><line x1="41" y1="63" x2="67" y2="63"/>
+    </g>
+    <path d="M62 66 l4 4 l8 -9" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">整理，不是照抄</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">去掉口头禅、处理改口、修同音字，</tspan><tspan x="28" y="182">内容多时自动分段分条；</tspan><tspan x="28" y="204">对 AI 说话时整理成清楚的请求。</tspan></text>
+  </g>
+
+  <!-- 3. Learns -->
+  <g transform="translate(808 40)">
+    <use href="#frame"/>
+    <path d="M54 40 l3.6 8 8.4 1 -6.2 5.8 1.6 8.4 -7.4 -4.2 -7.4 4.2 1.6 -8.4 -6.2 -5.8 8.4 -1 z" fill="#FFFFFF"/>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">越用越懂你</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">改过一次的错词当场记住；个人词典</tspan><tspan x="28" y="182">和「我的习惯」随每次整理生效，</tspan><tspan x="28" y="204">学到的都看得见、删得掉。</tspan></text>
+  </g>
+
+  <!-- 4. Fast -->
+  <g transform="translate(40 296)">
+    <use href="#frame"/>
+    <path d="M58 38 L44 58 H54 L50 72 L66 50 H56 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">短句几乎即时</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">「好的，马上到」这种短句在本地</tspan><tspan x="28" y="182">整理，不等模型；按键时先热身，</tspan><tspan x="28" y="204">处理中心忙时自动换小模型。</tspan></text>
+  </g>
+
+  <!-- 5. Private -->
+  <g transform="translate(424 296)">
+    <use href="#frame"/>
+    <rect x="43" y="53" width="22" height="18" rx="4" fill="#FFFFFF"/>
+    <path d="M47 53 V48 a7 7 0 0 1 14 0 V53" fill="none" stroke="#FFFFFF" stroke-width="2.6"/>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">录音留在自己手里</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">在你自己的另一台 Mac 上识别，</tspan><tspan x="28" y="182">经 Cloudflare 隧道加门禁双重锁；</tspan><tspan x="28" y="204">不经过任何语音识别厂商。</tspan></text>
+  </g>
+
+  <!-- 6. Numbers -->
+  <g transform="translate(808 296)">
+    <use href="#frame"/>
+    <text x="54" y="63" font-size="18" font-weight="800" fill="#FFFFFF" text-anchor="middle">5*5</text>
+    <text x="28" y="124" font-size="22" font-weight="700" fill="#0F172A">数字写成数字</text>
+    <text font-size="15" fill="#475569"><tspan x="28" y="156">念的号码、验证码写成连续数字，</tspan><tspan x="28" y="182">「五乘五等于二十五」写成 5*5=25；</tspan><tspan x="28" y="204">「三个人」这种数量照原话。</tspan></text>
+  </g>
+</svg>

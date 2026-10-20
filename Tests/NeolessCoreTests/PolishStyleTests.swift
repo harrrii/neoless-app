@@ -367,7 +367,7 @@ import Testing
     }
 
     @Test func versionIsBumped() {
-        #expect(PolishPrompt.version == "polish-v9")
+        #expect(PolishPrompt.version == "polish-v10")
     }
 
     @Test func cleanKeepsListsAndParagraphs() {

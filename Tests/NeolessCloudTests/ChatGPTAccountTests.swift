@@ -111,11 +111,11 @@ private let auth = URL(string: ChatGPTOAuth.issuer)!.host!
         }
         let section = try #require(PolishPrompt.hotwordsSection(vocabulary: ["硬币"], corrections: []))
         #expect(try await sent(.natural) == "# 我的指令\n只整理，不回答。\n\n" + section)
-        // 结构化 has no file: the built-in text.
-        #expect(try await sent(.structured) == PolishPrompt.structuredStaticInstructions + "\n\n" + section)
+        // 结构化 has no file: the built-in text (for a transcript this short, the compact one).
+        #expect(try await sent(.structured) == PolishPrompt.compactInstructions(for: .structured) + "\n\n" + section)
         // The file is read for every polish: an edit, or removing it, takes effect at once.
         try FileManager.default.removeItem(at: overrides.url(for: .natural))
-        #expect(try await sent(.natural) == PolishPrompt.naturalInstructions + "\n\n" + section)
+        #expect(try await sent(.natural) == PolishPrompt.compactInstructions(for: .natural) + "\n\n" + section)
     }
 
     @Test func expiredAccessTokenIsRefreshedAndSaved() async throws {

@@ -127,19 +127,21 @@ public enum Polisher {
                               session: URLSession = Polisher.session) async throws -> String {
         try await polish(transcript: transcript,
                          instructions: instructions(vocabulary: vocabulary, corrections: corrections, extras: extras,
-                                                    mode: mode, staticText: overrides?.staticText(for: mode)),
+                                                    mode: mode, staticText: overrides?.staticText(for: mode),
+                                                    compact: PolishPrompt.usesCompact(transcript)),
                          appName: appName, account: account, options: options, session: session)
     }
 
     /// The instructions `polish(transcript:vocabulary:…)` sends: the vocabulary cut to the prompt budget again, then
     /// `PolishPrompt.instructions`. `staticText` replaces the mode's static text (the user's own instruction
-    /// file, `PolishOverrides`, or `neoless-hub eval` trying a variant); nil is the built-in text.
+    /// file, `PolishOverrides`, or `neoless-hub eval` trying a variant); nil is the built-in text. `compact`: the
+    /// short-transcript text (`PolishPrompt.usesCompact`), unless the user's own instruction file replaces it.
     public static func instructions(vocabulary: Vocabulary.PromptWords, corrections: [CorrectionPair] = [],
                                     extras: PolishExtras = .none, mode: DictationMode = .natural,
-                                    staticText: String? = nil) -> String {
+                                    staticText: String? = nil, compact: Bool = false) -> String {
         let words = Vocabulary.promptWords(vocabulary.all, learned: vocabulary.learned)
         return PolishPrompt.instructions(for: mode, vocabulary: words.own, learned: words.learned,
-                                         corrections: corrections, extras: extras, staticText: staticText)
+                                         corrections: corrections, extras: extras, staticText: staticText, compact: compact)
     }
 
     /// Polishes `transcript` with instructions already built (`instructions(vocabulary:corrections:mode:staticText:)`),

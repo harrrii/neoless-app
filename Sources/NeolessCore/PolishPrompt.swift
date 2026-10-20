@@ -19,7 +19,7 @@ import Foundation
 /// shared example is there to show, and a few settings (a paragraph of about 80 characters, the list layouts)
 /// still follow the community style pack for OpenLess that the prompt started from, whose licence is unclear.
 public enum PolishPrompt {
-    public static let version = "polish-v9"
+    public static let version = "polish-v10"
 
     /// The instructions for one request in `mode`. `.raw` is never polished; it gets the natural instructions.
     /// - Parameters:
@@ -32,8 +32,8 @@ public enum PolishPrompt {
     ///     (`PolishOverrides`) and `neoless-hub eval` trying a variant. Nil is the text below.
     public static func instructions(for mode: DictationMode, vocabulary: [String] = [], learned: [String] = [],
                                     corrections: [CorrectionPair] = [], extras: PolishExtras = .none,
-                                    staticText: String? = nil) -> String {
-        var sections = [staticText ?? staticInstructions(for: mode)]
+                                    staticText: String? = nil, compact: Bool = false) -> String {
+        var sections = [staticText ?? (compact ? compactInstructions(for: mode) : staticInstructions(for: mode))]
         if let habits = habitsSection(extras.habits) { sections.append(habits) }
         if let words = hotwordsSection(vocabulary: vocabulary, learned: learned, corrections: corrections,
                                        repeated: extras.repeated) {
@@ -61,6 +61,41 @@ public enum PolishPrompt {
     public static let structuredStaticInstructions = [structuredRole, principles, hotwordsBlock, listRules, structuredScenes,
                                                       termRules, examplesSection(structuredExamples), structuredRules]
         .joined(separator: "\n\n")
+
+    /// Transcripts up to this many characters get the compact instructions (`compactInstructions(for:)`).
+    public static let compactLimit = 80
+
+    /// Whether `transcript` is short enough for the compact instructions: one or two sentences, where the long
+    /// 分项、分段 rules and the examples have nothing to do but still cost the model time to read.
+    public static func usesCompact(_ transcript: String) -> Bool {
+        transcript.filter { !$0.isWhitespace }.count <= compactLimit
+    }
+
+    /// The instructions for a short transcript: the same role, principles, 热词与纠错, term and safety rules, with
+    /// a few lines in place of the long list, paragraph, scene and example sections. About a third as long.
+    public static func compactInstructions(for mode: DictationMode) -> String {
+        switch mode {
+        case .structured: return structuredCompactInstructions
+        case .natural, .raw: return naturalCompactInstructions
+        }
+    }
+
+    public static let naturalCompactInstructions = [naturalRole, principles, hotwordsBlock, shortRules, termRules,
+                                                    neolessRules].joined(separator: "\n\n")
+
+    public static let structuredCompactInstructions = [structuredRole, principles, hotwordsBlock, shortRules, termRules,
+                                                       structuredRules].joined(separator: "\n\n")
+
+    /// What the long sections say, for a transcript of a sentence or two.
+    static let shortRules = """
+    # 简短内容的整理
+    这段转写很短，一般是一两句话：
+    - 只有一两件事，就写成一两句自然的话，不编号、不分段，不加“如下”之类的引导语；有 3 件及以上要对方逐条去做或检查的事，用“1. 2. 3.”分行列出，每条一件事，条与条之间不空行。
+    - 去掉“呃”“嗯”“那个”“对吧”“啊”“就是”这类想下一句时顺嘴说出的词，句首随口带出的“然后”“就是”也一并去掉；说话人改了口，只留改过之后的那个说法。
+    - 识别听错的字（包括读音相同的字）、标点和明显不通的语法都改对；原来是问句的，整理完还是问句。
+    - 聊天软件（微信、信息）里的简短回复保持口语和原来的语气、称呼、语气词（“吧”“呀”“哈哈”）。
+    - 话说到一半就停了，整理到停下的地方，用“……”收尾，不替用户补完。
+    """
 
     static let hotwordsTitle = "# neoless 热词表"
 
@@ -222,7 +257,7 @@ public enum PolishPrompt {
     产品名、工具名、人名、术语、编号和容易识别错的词，先看热词表里有没有。
     1. 产品名和工具名按通行的写法写（例如 ChatGPT、Claude Code、GitHub 的大小写和连写）。英文名被拆成了几个词，或者被听成读音相近的另一个英文词、中文词时，照热词表里的词和纠正改回来；热词表里没有，就结合当前应用和话题判断。
     2. 同音、近音的错字按话题改：一个词放在这个话题里明显讲不通，而有个读音相近的词正好讲得通，就改（例如订房时说的“民俗”应为“民宿”，讲上线时的“部属”应为“部署”）。这一条不看整理后的长短，也不看有没有分条：哪怕最后只是一句话、几乎没动，认得出的错字也要改对。
-    3. 数字：价格、金额、百分比、日期、钟点、版本号写阿拉伯数字（“百分之一点五”写 1.5%，“二十五号”写 25 号）；口语里的数量（一个、两次、一个小时）照原话。字母加数字的编号、型号、代码写成连在一起的形式，不写成汉字读音（例如读成“CS 一零一”的课程代码写 CS101，读成“A 三二零”的型号写 A320）；和热词表里某个编号只差一个读音相近的字母时，按热词表写。
+    3. 数字：价格、金额、百分比、日期、钟点、版本号写阿拉伯数字（“百分之一点五”写 1.5%，“二十五号”写 25 号）；一位一位念的一串数字（电话号码、账号、验证码、编号）写成连在一起的阿拉伯数字（“一三五七九二”写 135792）；念的算式写成算式：数字用阿拉伯数字，加、减、乘、除以、等于写成 +、-、*、/、=，中间不加空格（“五乘五”写 5*5，“十二除以四等于三”写 12/4=3），原话没说结果就不写结果；口语里的数量（一个、两次、一个小时）照原话。字母加数字的编号、型号、代码写成连在一起的形式，不写成汉字读音（例如读成“CS 一零一”的课程代码写 CS101，读成“A 三二零”的型号写 A320）；和热词表里某个编号只差一个读音相近的字母时，按热词表写。
     4. 拿不准就保守：读音、上下文、当前应用都对得上，能确定是哪个词，才改，而且改成的词读音要和原词接近。只是猜的话，把原词或那半句原样留在原处，不要编出一个通顺却不是原话的意思，不要把同一个没把握的猜测用到好几处，不要把整句删掉，也不要把没听清的英文缩写换成另一个长得像的缩写。人名和生僻字不要随手换成常见字。
 
     # 照原样保留
