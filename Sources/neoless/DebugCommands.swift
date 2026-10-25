@@ -572,6 +572,8 @@ enum DebugCommands {
         await shot("overview-busy-30-days", history, busy, opens)
         router.chartMetric = .characters
         await shot("overview-busy-30-days-characters", history, busy, opens)
+        router.chartRange = .all
+        await shot("overview-busy-all-characters", history, busy, opens)
         router.chartRange = .week
         await shot("overview-busy-characters", history, busy, opens)
         router.chartMetric = .seconds

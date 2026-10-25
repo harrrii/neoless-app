@@ -174,6 +174,15 @@ final class StubPolisher: HubPolishing {
 
     func waitForRefresh() async {}
 
+    /// What `judge` says is misheard among the pairs asked; every question is kept.
+    var judgeAnswer: ([CorrectionPair]) throws -> [CorrectionPair] = { _ in [] }
+    private(set) var judgeCalls: [(heard: String, delivered: String, pairs: [CorrectionPair])] = []
+
+    func judge(heard: String, delivered: String, pairs: [CorrectionPair], options: PolishOptions) async throws -> [CorrectionPair] {
+        judgeCalls.append((heard, delivered, pairs))
+        return try judgeAnswer(pairs)
+    }
+
     func polish(_ transcript: String, mode: DictationMode, appName: String?, vocabulary: Vocabulary.PromptWords,
                 corrections: [CorrectionPair], extras: PolishExtras, options: PolishOptions) async throws -> String {
         calls.append(Call(transcript: transcript, mode: mode, appName: appName, vocabulary: vocabulary, corrections: corrections,

@@ -73,11 +73,17 @@ public struct Extraction: Equatable, Sendable {
     /// texts were cut into words. For `shows(_:)` only, and like the rest of a comparison never kept: it
     /// holds the user's text. Empty when the comparison gave up (a rewrite, a secret in the passage).
     public var replaced: [CorrectionPair]
+    /// Words typed over others that the rules could not take as recognition errors only because the two do
+    /// not sound alike, or because a name was typed over everyday words, and that no rule forbids
+    /// (`CorrectionExtractor.isJudgeable`): worth asking ChatGPT about, with what the recognizer heard
+    /// (`POST /v1/learning/judge`). Each like `candidates`, the words that changed and no more. Asking
+    /// teaches nothing by itself; what ChatGPT judges misheard is learned on the Neo (`Kind.judged`).
+    public var doubts: [CorrectionPair]
 
     public init(fixes: [TermFix] = [], nothing: Nothing? = nil, baseline: String? = nil, missedName: Nothing? = nil,
-                candidates: [CorrectionPair] = [], replaced: [CorrectionPair] = []) {
+                candidates: [CorrectionPair] = [], replaced: [CorrectionPair] = [], doubts: [CorrectionPair] = []) {
         self.fixes = fixes; self.nothing = nothing; self.baseline = baseline; self.missedName = missedName
-        self.candidates = candidates; self.replaced = replaced
+        self.candidates = candidates; self.replaced = replaced; self.doubts = doubts
     }
 
     /// Whether the passage this comparison looked at still shows `swap`, which an earlier comparison of the
@@ -249,6 +255,8 @@ public struct CorrectionExtractor: Sendable {
         var nameMissed = false, unknownNameMissed = false
         /// Swaps no rule takes and none forbids: remembered, and learned when made again (`Extraction.candidates`).
         var candidates: [CorrectionPair] = []
+        /// Swaps worth asking ChatGPT about (`Extraction.doubts`).
+        var doubts: [CorrectionPair] = []
         for (n, core) in replacements.enumerated() {
             let h = Self.widened(core, old: old, new: new, known: known, segment: segmentCJK)
             // With the unchanged capitalized words next to it, as it would be learned: the dictionary may
@@ -261,7 +269,7 @@ public struct CorrectionExtractor: Sendable {
             if case .no(let skip) = verdict {
                 skips.append(skip)
                 // Every one of them is listed; `LearningBook.record` takes `maxPairsPerEvent` of them.
-                if Self.repeatSkips.contains(skip) {
+                if Self.nameSkips.contains(skip) {
                     // The words that changed, and nothing of what stands next to them: the same swap must
                     // be the same pair in every sentence, or its second time is never recognised. Only
                     // when the dictionary has the name with the unchanged capitalized words next to it
@@ -269,9 +277,16 @@ public struct CorrectionExtractor: Sendable {
                     let swap = phraseKnown ? CorrectionPair(wrong: Self.text(old[e.old]), right: phrase)
                         : Self.swap(wordHunks[replacing[n]], old: wordOld, new: wordNew,
                                     placed: CorrectionPair(wrong: Self.text(old[h.old]), right: Self.text(new[h.new])))
-                    if repeatable(wrong: swap.wrong, right: swap.right, known: known),
-                       !candidates.contains(where: { $0.wrong.lowercased() == swap.wrong.lowercased() && $0.right.lowercased() == swap.right.lowercased() }) {
+                    func same(_ p: CorrectionPair) -> Bool {
+                        p.wrong.lowercased() == swap.wrong.lowercased() && p.right.lowercased() == swap.right.lowercased()
+                    }
+                    if Self.repeatSkips.contains(skip), repeatable(wrong: swap.wrong, right: swap.right, known: known),
+                       !candidates.contains(where: same) {
                         candidates.append(swap)
+                    }
+                    if repeatable(wrong: swap.wrong, right: swap.right, known: known, judging: true),
+                       !doubts.contains(where: same) {
+                        doubts.append(swap)
                     }
                 }
                 let name = Self.text(new[h.new])
@@ -310,14 +325,14 @@ public struct CorrectionExtractor: Sendable {
         let missed: Extraction.Nothing? = nameMissed ? (unknownNameMissed ? .unlikeName : .knownName) : nil
         guard fixes.isEmpty else {
             return Extraction(fixes: fixes, baseline: Self.applying(learned, old: old, new: new), missedName: missed,
-                              candidates: candidates, replaced: stretches)
+                              candidates: candidates, replaced: stretches, doubts: doubts)
         }
         if skips.contains(.sensitive) { return Extraction(nothing: .sensitive) }
         if skips.allSatisfy({ $0 == .format || $0 == .caseOnly }) { return Extraction(nothing: .formatOnly) }
         // A swap that is only remembered moves nothing into the baseline: it is compared again, whole, with
         // what was delivered, so its wrong side is never something the user typed on the way.
         return Extraction(nothing: missed ?? .notTerms, baseline: candidates.isEmpty ? nil : a, candidates: candidates,
-                          replaced: stretches)
+                          replaced: stretches, doubts: doubts)
     }
 
     /// Whether `word` stands in `text` as a word of its own: at each end the text ends, or what follows is
@@ -1366,8 +1381,19 @@ public struct CorrectionExtractor: Sendable {
         repeatable(wrong: pair.wrong, right: pair.right, known: Set(knownTerms.map(Self.termKey)))
     }
 
-    /// `isRepeatable`, with the dictionary as `termKey`s.
-    func repeatable(wrong rawWrong: String, right rawRight: String, known: Set<String>) -> Bool {
+    /// Whether ChatGPT may be asked if `pair` was misheard, and what it judges misheard learned
+    /// (`LearnedCorrection.Kind.judged`): everything `isRepeatable` refuses for good stays refused (numbers,
+    /// dates, negation, opposites, one person or place for another, secrets, structural words, the user's
+    /// own dictionary word typed over, leftover pinyin…). Let through are only the two things the rules
+    /// cannot decide from the words alone: that the two do not sound alike (`resembles`), and a name in
+    /// Latin letters typed over Chinese words (克劳德 → Claude, 萝卜 → Notion). What the recognizer heard
+    /// is what decides those, and only ChatGPT is shown it.
+    public func isJudgeable(_ pair: CorrectionPair, knownTerms: Set<String> = []) -> Bool {
+        repeatable(wrong: pair.wrong, right: pair.right, known: Set(knownTerms.map(Self.termKey)), judging: true)
+    }
+
+    /// `isRepeatable`, with the dictionary as `termKey`s; `isJudgeable` when `judging`.
+    func repeatable(wrong rawWrong: String, right rawRight: String, known: Set<String>, judging: Bool = false) -> Bool {
         let wrong = rawWrong.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
         let right = rawRight.precomposedStringWithCanonicalMapping.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wrong.isEmpty, !right.isEmpty, !(wrong + right).contains(where: \.isNewline) else { return false }
@@ -1450,9 +1476,12 @@ public struct CorrectionExtractor: Sendable {
         if hanWrong, latinRight {
             // Only characters that make no word, heard for a name with a capital: an everyday word typed
             // over with a name (苹果 → Apple) would be put before the model for every 苹果.
-            guard Self.isLatinName(right), wrongWords.count >= 2, wrongWords.allSatisfy({ $0.text.count == 1 }),
-                  !wrong.contains(where: { Self.standaloneHan.contains($0) || Self.structuralHan.contains(String($0)) }) else {
-                return false
+            guard Self.isLatinName(right) else { return false }
+            if !judging {
+                guard wrongWords.count >= 2, wrongWords.allSatisfy({ $0.text.count == 1 }),
+                      !wrong.contains(where: { Self.standaloneHan.contains($0) || Self.structuralHan.contains(String($0)) }) else {
+                    return false
+                }
             }
         }
         if latinWrong, latinRight, wrongWords.count == 1, rightWords.count == 1,
@@ -1461,8 +1490,8 @@ public struct CorrectionExtractor: Sendable {
         // What the input method left.
         if !known.contains(Self.termKey(right)), Self.isLeftoverPinyin(wrong, right) { return false }
         if Self.isPinyinDebris(wrong, right) { return false }
-        // And something must speak for a slip of the recognizer.
-        guard Self.resembles(wrong, right) else { return false }
+        // And something must speak for a slip of the recognizer: the words, or (judging) ChatGPT.
+        guard judging || Self.resembles(wrong, right) else { return false }
         // Last, because it costs the most: one person or one place for another, by names no list has (what
         // the system takes both words for).
         if hanWrong, hanRight, let kind = nameKind(wrong), kind == nameKind(right) { return false }

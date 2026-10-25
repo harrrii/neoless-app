@@ -168,6 +168,12 @@ Body `{ "pairs": [{"wrong","right"}], "dictationID": UUID?, "id": UUID?, "kind":
 
 **Mac 和 Neo 要用同一版规则**：Mac 这边能学的种类比旧版多（汉字音译成英文名的“科德克斯 → Codex”、朝词典里的词改的“labels → Lavoben”等），旧版 Hub 的 `isTermFix` 不收这些，回 `accepted: 0`。只学成词的那些，新版 Mac 用上面“一边为空的一对”发过来，旧版 Hub 不收，所以也要一起更新。Mac 更新后要从同一个提交重新部署 Hub（`scripts/hub-deploy.sh`），否则这些纠正只记在 Mac 上，用 Neo 处理时不起作用；Hub 更新之后，同一个词再改一次就会同步过去。
 
+### `POST /v1/learning/judge`
+Body `{ "dictationID": UUID, "pairs": [{"wrong","right"}] }` → `{ "learned": [...], "overLimit": [...], "notMisheard": [...] }`（2026-10-23，Hub 1.4.0）。规则拿不准的修改交给 ChatGPT 判断：设备比对出的、只因为“读音不像”或“英文名盖住了日常的词”而没学的那几处（`Extraction.doubts`，每处只是改动的那几个词，同 candidates）。Hub 找到这条听写（找不到 → 404），每对先过 `CorrectionExtractor.isJudgeable`（就是 `isRepeatable` 去掉“有点像”和“只有不成词的单字才能换成英文名”两条；数字、日期、否定、反义、换了个人或地方、密码、结构词、用户自己的词被换掉、输入法残留……照旧永远不学），错写还得出现在这条听写的识别原文或输入的文字里（之后被 `…/edit` 改过的不查），一次最多 3 对（`MisheardJudge.maxPairs`）。然后把识别原文、输入的文字和这几对发给 ChatGPT（`MisheardJudge.instructions`，用 Hub 的整理模型，时限同一次短整理），要求只回 JSON；判为听错的（`misheard: true`，别的写法、没问过的、看不懂的回答都算不是）用 `kind: "judged"` 记进学习簿（`LearnedCorrection.Kind.judged`，计数 1，同一条听写再问不重复计数，占当天 20 条新纠正的名额，改成的词照常作为自动学到的词进词典）。ChatGPT 失败 → 503（同整理失败），什么也不学。
+- **怎么用**：和按规则学到的纠正一样列在“用户以前的纠正（语境相符时才改）”里；但 `applyConfirmed` 永远不套用（只在一句话里判过），`GET /v1/learning` 带 `"kind": "judged"`。
+- **按现在的规则过一遍**（`LearningBook.unusable`）时，judged 的按 `isJudgeable` 判，不按读音。
+- Mac：学习时有 doubts、这条是 Neo 的听写、用 Neo 处理开着，就问一次（`LearningStore.onJudge` → `HubSync.judge`）。这次修改按规则什么也没学到时，学习记录先不写“换了词，不确定是听错的”，等回答：学到了写“ChatGPT 判断是听错，记住了 N 个”（别的 App 里胶囊照常说“已记住：X → Y”），没学到写“ChatGPT 看过：像是换了说法，不是听错，没记”，没回答（连不上、旧版 Hub、ChatGPT 失败）就写原来那句。学到的同时记进本机学习簿（kind judged，不再作为 observation 发回 Neo），所以撤销、改回、词典页删除都照常；词典页标“ChatGPT 判断”。
+
 ### `GET /v1/learning` / `DELETE /v1/learning?wrong=<词>`
 `{ "pairs": [{"wrong","right","count","lastSeen","kind"?}] }`（新的在前；DELETE 返回删除后的列表；`lastSeen` 为 ISO 8601；`kind` 只有“改了两次的词”才带，值为 `"repeated"`，读取时不认识的值原样保留）。DELETE 删掉所有这个 `wrong` 的对（不分大小写和空白），学习加进词典、别的对又不再教的词一起移出词典；没有这个词不算错（重发的删除），照样返回列表；缺 `wrong` → 400。
 

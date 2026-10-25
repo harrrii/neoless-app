@@ -103,6 +103,7 @@ public enum HubPath {
     public static let learning = "/v1/learning"
     public static let learningObservations = "/v1/learning/observations"
     public static let learningForget = "/v1/learning/forget"
+    public static let learningJudge = "/v1/learning/judge"
     public static let vocabulary = "/v1/vocabulary"
     public static let habits = "/v1/habits"
     public static let history = "/v1/history"
@@ -661,6 +662,31 @@ public struct LearningObservationsResponse: Codable, Equatable, Sendable {
     public var id: UUID?
     public init(accepted: Int, refused: [CorrectionPair]? = nil, terms: [String]? = nil, id: UUID? = nil) {
         self.accepted = accepted; self.refused = refused; self.terms = terms; self.id = id
+    }
+}
+
+/// `POST /v1/learning/judge`: words the user typed over others in dictation `dictationID` that the rules could not
+/// tell from a change of mind (`Extraction.doubts`). The hub asks ChatGPT, with what its recognizer heard for that
+/// dictation, whether each was misheard, and learns those it was (`LearnedCorrection.Kind.judged`). The words come
+/// without the user's text; the hub has the dictation's own.
+public struct LearningJudgeRequest: Codable, Equatable, Sendable {
+    /// The hub's `DictationResult.id`.
+    public var dictationID: UUID
+    public var pairs: [CorrectionPair]
+    public init(dictationID: UUID, pairs: [CorrectionPair]) {
+        self.dictationID = dictationID; self.pairs = pairs
+    }
+}
+
+public struct LearningJudgeResponse: Codable, Equatable, Sendable {
+    /// Judged misheard and learned (or counted again).
+    public var learned: [CorrectionPair]
+    /// Judged misheard, and not learned after all: the day's new corrections are used up.
+    public var overLimit: [CorrectionPair]
+    /// Judged not misheard, or not asked about: a rule forbids it, or the dictation's text does not have it.
+    public var notMisheard: [CorrectionPair]
+    public init(learned: [CorrectionPair] = [], overLimit: [CorrectionPair] = [], notMisheard: [CorrectionPair] = []) {
+        self.learned = learned; self.overLimit = overLimit; self.notMisheard = notMisheard
     }
 }
 

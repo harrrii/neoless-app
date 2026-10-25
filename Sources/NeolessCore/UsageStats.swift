@@ -125,6 +125,11 @@ public enum UsageMetric: String, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// How long one bar of a series stands for.
+public enum UsagePeriod: Sendable {
+    case day, week, month
+}
+
 /// One day of a series.
 public struct UsagePoint: Equatable, Sendable, Identifiable {
     public let date: UsageDate
@@ -256,6 +261,47 @@ public struct UsageStats: Equatable, Sendable {
     /// of speech to divide by.
     public static func speakingRate(_ usage: UsageDay) -> Double? {
         usage.seconds >= 1 && usage.characters > 0 ? Double(usage.characters) / usage.seconds * 60 : nil
+    }
+
+    /// 全部: everything counted up to `today`, as few bars as can still be told apart. A bar a day while
+    /// that is at most `dailyBars` days (and never fewer than a week, like 近 7 天); a bar a week, starting
+    /// on `firstWeekday`, up to a year; a bar a month after that. A point's date is the first day of its
+    /// bar; the last bar is the one `today` is in.
+    public func everything(endingOn today: UsageDate, firstWeekday: Int) -> (period: UsagePeriod, points: [UsagePoint]) {
+        let first = Swift.min(firstDay ?? today, today)
+        let span = first.days(until: today) + 1
+        if span <= Self.dailyBars { return (.day, series(days: Swift.max(7, span), endingOn: today)) }
+        let period: UsagePeriod = span <= 364 ? .week : .month
+        var starts: [UsageDate] = []
+        switch period {
+        case .day, .week:
+            let firstWeekday = (1...7).contains(firstWeekday) ? firstWeekday : 1
+            var start = first.startOfWeek(firstWeekday: firstWeekday)
+            while start <= today { starts.append(start); start = start.adding(days: 7) }
+        case .month:
+            var (year, month) = (first.year, first.month)
+            while (year, month) <= (today.year, today.month) {
+                starts.append(UsageDate(year: year, month: month, day: 1))
+                (year, month) = month == 12 ? (year + 1, 1) : (year, month + 1)
+            }
+        }
+        var sums = Array(repeating: UsageDay.zero, count: starts.count)
+        for (date, usage) in days where date >= starts[0] && date <= today {
+            let i = period == .month ? (date.year - first.year) * 12 + date.month - first.month
+                                     : starts[0].days(until: date) / 7
+            sums[i] = sums[i] + usage
+        }
+        return (period, zip(starts, sums).map { UsagePoint(date: $0, usage: $1) })
+    }
+
+    /// The most days 全部 draws a bar each for.
+    public static let dailyBars = 60
+
+    /// Total and daily average of `metric` over everything up to `today` (全部): the average is over the
+    /// days since the first dictation.
+    public func summary(_ metric: UsageMetric, upTo today: UsageDate) -> (total: Double, dailyAverage: Double) {
+        guard let first = firstDay, first <= today else { return (0, 0) }
+        return summary(metric, of: series(days: first.days(until: today) + 1, endingOn: today))
     }
 
     /// The year at a glance: `weeks` columns ending with the week `today` is in.
@@ -556,6 +602,15 @@ public enum UsageText {
     /// "10月8日 周四".
     public static func day(_ date: UsageDate) -> String {
         "\(date.month)月\(date.day)日 \(weekday(date.weekday))"
+    }
+
+    /// A bar of 全部, from its first day: "10月8日 周四", "10月6日起一周", "8月" (this year) or "2025年8月".
+    public static func period(_ start: UsageDate, _ period: UsagePeriod, asOf today: UsageDate) -> String {
+        switch period {
+        case .day: return day(start)
+        case .week: return date(start, asOf: today) + "起一周"
+        case .month: return (start.year == today.year ? "" : "\(start.year)年") + "\(start.month)月"
+        }
     }
 
     /// "周一" … "周日" for `Calendar`'s 1 = Sunday … 7 = Saturday.

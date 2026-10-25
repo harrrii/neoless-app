@@ -8,7 +8,7 @@ import NeolessCore
 public final class HubService {
     /// Told to devices (`GET /v1/health`). Raised whenever the hub's learning rules change: a device then
     /// offers it once more the corrections it turned down before (`HubLearning.resend`).
-    public nonisolated static let version = "1.3.0"
+    public nonisolated static let version = "1.4.0"
 
     public let folder: HubDataFolder
     public let devices: DeviceRegistry
@@ -652,6 +652,53 @@ public final class HubService {
     }
 
     /// `POST /v1/learning/forget`: many at once (清空 on a device). 400 for more than `Hub.maxForgetWrongs`.
+    /// `POST /v1/learning/judge`: words the user typed over others in a dictation of this hub that the rules could
+    /// not tell from a change of mind. Each must be one no rule forbids (`CorrectionExtractor.isJudgeable`, with the
+    /// hub's own dictionary words), and its typed-over side must be in the dictation as heard or delivered (unless
+    /// the text was edited since): a device cannot have the hub ask about words it never wrote. ChatGPT is shown
+    /// what the recognizer heard and what was delivered (`MisheardJudge`); what it judges misheard is learned with
+    /// kind `.judged`, like a correction the rules learned. A ChatGPT failure is an error: nothing is learned and
+    /// nothing is said about the words.
+    public func judge(_ body: LearningJudgeRequest) async throws -> LearningJudgeResponse {
+        guard let entry = history.entry(id: body.dictationID) else { throw HubFailure.notFound }
+        let extractor = CorrectionExtractor()
+        let known = Set(words.ownWords)
+        func plain(_ s: String) -> String { s.lowercased().filter { !$0.isWhitespace } }
+        let written = plain(entry.result.raw) + "\u{1F}" + plain(entry.result.text)
+        var asked: [CorrectionPair] = [], refused: [CorrectionPair] = []
+        var seen = Set<String>()
+        for pair in body.pairs {
+            let wrong = pair.wrong.trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = pair.right.trimmingCharacters(in: .whitespacesAndNewlines)
+            let candidate = CorrectionPair(wrong: wrong, right: right)
+            guard asked.count < MisheardJudge.maxPairs, wrong.count <= Self.maxPairLength, right.count <= Self.maxPairLength,
+                  seen.insert(LearningBook.key(candidate)).inserted,
+                  entry.edited || written.contains(plain(wrong)),
+                  extractor.isJudgeable(candidate, knownTerms: known) else {
+                refused.append(pair)
+                continue
+            }
+            asked.append(candidate)
+        }
+        guard !asked.isEmpty else { return LearningJudgeResponse(notMisheard: refused) }
+        let misheard: [CorrectionPair]
+        do {
+            misheard = try await polisher.judge(heard: entry.result.raw, delivered: entry.result.text, pairs: asked,
+                                                options: config.polishOptions)
+        } catch {
+            HubLog.write("judge: \(PolishFailure.short(error))")
+            throw HubFailure.polishFailed(error)
+        }
+        let yes = Set(misheard.map(LearningBook.key))
+        let event = words.learn([], judged: asked.filter { yes.contains(LearningBook.key($0)) }, source: .otherApp,
+                                recordID: body.dictationID)
+        let learned = Set((event?.learned ?? []).map(LearningBook.key))
+        HubLog.write("judge: \(asked.count) asked, \(yes.count) misheard, \(learned.count) learned")
+        return LearningJudgeResponse(learned: asked.filter { learned.contains(LearningBook.key($0)) },
+                                     overLimit: asked.filter { yes.contains(LearningBook.key($0)) && !learned.contains(LearningBook.key($0)) },
+                                     notMisheard: asked.filter { !yes.contains(LearningBook.key($0)) } + refused)
+    }
+
     public func forgetLearning(_ body: LearningForget) throws -> LearningList {
         guard body.wrongs.count <= Hub.maxForgetWrongs else { throw HubFailure.badRequest("一次最多忘记 \(Hub.maxForgetWrongs) 条") }
         words.forget(wrongs: body.wrongs.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })

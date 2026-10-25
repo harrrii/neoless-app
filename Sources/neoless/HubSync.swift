@@ -93,6 +93,11 @@ final class HubSync {
             vocabulary.setHubLearned(cache.vocabulary.learned)
         }
         learning.onChange = { [weak self] change in self?.learningChanged(change) }
+        learning.canJudge = { [weak self] id in
+            guard let self else { return false }
+            return self.hub.pairing != nil && self.hub.dictationClient != nil && self.hubID(id) != nil
+        }
+        learning.onJudge = { [weak self] doubt in self?.judge(doubt) }
         learning.onForget = { [weak self] wrongs in
             guard let self, self.hub.pairing != nil else { return }
             wrongs.forEach { self.outbox.forget($0) }
@@ -144,6 +149,28 @@ final class HubSync {
         // Swaps made twice go as that: by the rules for recognition errors the Neo would take none of them.
         outbox.observe(change.repeated, dictationID: dictation, id: UUID(), kind: .repeated)
         if outbox != before { queued() }
+    }
+
+    /// Asks the Neo whether the words of `doubt` were misheard (`POST /v1/learning/judge`): its ChatGPT decides with
+    /// what its recognizer heard, and it learns those that were. The answer, or nil when none came, goes to
+    /// `LearningStore.judged`; a sync soon after brings what the Neo learned into its list here.
+    private func judge(_ doubt: LearningStore.Doubt) {
+        guard hub.pairing != nil, let client = hub.dictationClient, let dictation = hubID(doubt.recordID) else {
+            learning.judged(nil, doubt)
+            return
+        }
+        let started = epoch
+        Task { @MainActor [weak self] in
+            let answer: LearningJudgeResponse?
+            do {
+                answer = try await client.judge(doubt.pairs, dictationID: dictation)
+            } catch {
+                answer = nil
+            }
+            guard let self, self.epoch == started else { return }
+            self.learning.judged(answer, doubt)
+            if answer?.learned.isEmpty == false { self.syncSoon(after: 1) }
+        }
     }
 
     /// Whether the Neo has `pair`: in its list at the last sync, sent since, or being sent now. (One that was

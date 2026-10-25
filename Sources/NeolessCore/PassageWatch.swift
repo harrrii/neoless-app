@@ -188,25 +188,33 @@ public struct PassageWatch: Sendable {
         case end(End, flush: String?)
     }
 
-    /// A text is compared once it has not changed for `settle`. When the message is sent or the next
-    /// dictation begins, `flushStable` is enough (the user has moved on); less than that is a word still
-    /// being typed.
+    /// A text is compared once it has not changed for `settle`. When the next dictation begins, `flushStable`
+    /// is enough (the user has moved on); less than that is a word still being typed. A message sent is
+    /// finished however soon after the last keystroke: a word fixed and sent at once (delete, retype, ↩) is
+    /// what the user sent, and is compared as it was last seen.
     public static let settle: TimeInterval = 1.5, flushStable: TimeInterval = 0.3
     /// An input method that reports uncommitted text for this long without the text changing is taken at
     /// its word no longer (some fields always report it): the text is compared as it is. Pinyin really left
     /// in it teaches nothing (`CorrectionExtractor.isLeftoverPinyin`).
     public static let composingStale: TimeInterval = 4
     /// The watch lasts at most `maxDuration`, and `idleAfterChange` after the last settled change while
-    /// the user is in the field.
-    public static let maxDuration: TimeInterval = 120, idleAfterChange: TimeInterval = 30
+    /// the user is in the field. Long enough to read a long dictation through before fixing a word in it,
+    /// and to find a second one after the first.
+    public static let maxDuration: TimeInterval = 300, idleAfterChange: TimeInterval = 90
     /// Looks in a row without an answer before giving up: a busy app misses one now and then.
     public static let maxFailures = 3
     /// How often to look: more often for a few seconds after the text changed, seldom while the user is
     /// elsewhere and nothing waits to be compared.
     public static let pollInterval: TimeInterval = 0.4, busyInterval: TimeInterval = 0.2, busyFor: TimeInterval = 3
     public static let awayInterval: TimeInterval = 1
+    /// Nothing changed for this long: looked at as seldom as from afar.
+    public static let quietAfter: TimeInterval = 20
 
     private var last: String
+    /// The text last handed out for comparing, or the text as it landed.
+    private var handed: String
+    /// The last change was seen while focus was not in the field.
+    private var changedAway = false
     private var changedAt: TimeInterval
     private var composing = false
     /// `last` was handed out for comparing (or is the text as it landed, or changed while focus was elsewhere).
@@ -219,6 +227,7 @@ public struct PassageWatch: Sendable {
     /// `shown`: the passage as the field showed it when it landed, at `now` (any steady clock, in seconds).
     public init(shown: String, at now: TimeInterval) {
         last = shown
+        handed = shown
         changedAt = now
         started = now
     }
@@ -258,16 +267,28 @@ public struct PassageWatch: Sendable {
                 // Back in the field: the idle time counts from now.
                 if lastSettled != nil { lastSettled = now }
             }
+            // What changed while focus seemed elsewhere is the user's after all when they are back in the field
+            // and it is still there: an input method's candidate window takes focus from some fields while a
+            // word is typed, and the word lands then. Compared once it has settled, from now.
+            if focused {
+                if text == last, compared, text != handed, changedAway {
+                    compared = false
+                    changedAt = now
+                }
+                changedAway = false
+            }
             if text != last || isComposing != composing {
                 last = text
                 composing = isComposing
                 changedAt = now
+                changedAway = !focused
                 // What changes while focus is elsewhere is not the user typing into the field, as far as
                 // can be seen: it is not compared, and what was waiting to be is no longer what the field shows.
                 compared = !focused
             } else if !compared, now - changedAt >= (composing ? Self.composingStale : Self.settle) {
                 compared = true
                 lastSettled = now
+                handed = text
                 return .settled(text)
             }
         }
@@ -280,12 +301,15 @@ public struct PassageWatch: Sendable {
 
     /// The watch is over: `take` said so, or something outside did (a new dictation began). Always `.end`.
     /// A text never compared is handed over only when the reason says the user has finished with it
-    /// (`End.flushes`), no input method is composing in it, and it has been still for `flushStable`; from
-    /// afar, for the whole `settle` unless the message was sent (the user left, and may have left a word
-    /// half typed).
+    /// (`End.flushes`) and no input method is composing in it: sent, at once; at the next dictation, once it
+    /// has been still for `flushStable`, or from afar for the whole `settle` (the user left, and may have left
+    /// a word half typed).
     public mutating func end(_ reason: End, at now: TimeInterval) -> Step {
-        let needed = away && reason != .sent ? Self.settle : Self.flushStable
-        let flush = reason.flushes && !compared && !composing && now - changedAt >= needed
+        let needed = reason == .sent ? 0 : away ? Self.settle : Self.flushStable
+        // Sent: what was sent is the user's, also when it changed while focus seemed elsewhere (a word typed
+        // with an input method whose candidate window took focus, and sent at once).
+        let waiting = !compared || (reason == .sent && last != handed)
+        let flush = reason.flushes && waiting && !composing && now - changedAt >= needed
         compared = true
         return .end(reason, flush: flush ? last : nil)
     }
@@ -293,7 +317,8 @@ public struct PassageWatch: Sendable {
     /// How long to wait before the next look.
     public func interval(at now: TimeInterval) -> TimeInterval {
         if away, compared { return Self.awayInterval }
-        return now - changedAt < Self.busyFor ? Self.busyInterval : Self.pollInterval
+        let still = now - changedAt
+        return still < Self.busyFor ? Self.busyInterval : still > Self.quietAfter ? Self.awayInterval : Self.pollInterval
     }
 }
 

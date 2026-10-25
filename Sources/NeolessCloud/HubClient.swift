@@ -383,6 +383,14 @@ public final class HubClient: Sendable {
                             budget: timeouts.quick, repeatable: false))
     }
 
+    /// `POST /v1/learning/judge`: ChatGPT on the hub decides whether `pairs` were misheard. A ChatGPT request, so
+    /// the polish budget; not repeated (asking twice would count a learned pair twice only across dictations,
+    /// but it is a ChatGPT request the user waits on for nothing). A hub from before this answers 404.
+    public func judge(_ pairs: [CorrectionPair], dictationID: UUID) async throws -> LearningJudgeResponse {
+        try await send(json("POST", HubPath.learningJudge, LearningJudgeRequest(dictationID: dictationID, pairs: pairs),
+                            budget: timeouts.quick + 20, repeatable: false))
+    }
+
     /// `GET /v1/learning`.
     public func learning() async throws -> LearningList {
         try await send(quick("GET", HubPath.learning))

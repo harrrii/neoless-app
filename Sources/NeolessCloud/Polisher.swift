@@ -161,6 +161,19 @@ public enum Polisher {
         }
     }
 
+    /// One question with instructions of its own (`MisheardJudge`), through the same request, login and checks
+    /// as a polish, under the time limit of a short polish. The answer as `PolishPrompt.clean` leaves it.
+    @MainActor
+    public static func ask(instructions: String, question: String, account: ChatGPTAccount, options: PolishOptions,
+                           session: URLSession = Polisher.session) async throws -> String {
+        let body = ResponsesRequest.body(model: options.model, instructions: instructions, userText: question,
+                                         fast: options.fastTier)
+        let budget = PolishTimeout.seconds(forCharacters: 200, minimum: options.minimumTimeout)
+        return try await withTimeout(seconds: budget) { @MainActor in
+            try await Self.request(body: body, account: account, session: session)
+        }
+    }
+
     @MainActor
     private static func request(body: Data, account: ChatGPTAccount, session: URLSession) async throws -> String {
         var credential = try await account.credential()

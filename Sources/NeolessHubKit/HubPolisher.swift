@@ -11,6 +11,9 @@ public protocol HubPolishing: AnyObject {
     /// (`HubConfig.polishOptions(model:fastTier:)`).
     func polish(_ transcript: String, mode: DictationMode, appName: String?, vocabulary: Vocabulary.PromptWords,
                 corrections: [CorrectionPair], extras: PolishExtras, options: PolishOptions) async throws -> String
+    /// Those of `pairs` ChatGPT judges misheard, given what the recognizer heard and what was delivered
+    /// (`MisheardJudge`), or an error.
+    func judge(heard: String, delivered: String, pairs: [CorrectionPair], options: PolishOptions) async throws -> [CorrectionPair]
     /// For `GET /v1/health`.
     var health: HubHealth.ChatGPT { get }
     /// Returns once no login token refresh is running. A polish that timed out stops waiting for its refresh,
@@ -101,12 +104,26 @@ public final class ChatGPTPolisher: HubPolishing {
                                   options: options, session: session)
     }
 
+    public func judge(heard: String, delivered: String, pairs: [CorrectionPair],
+                      options: PolishOptions) async throws -> [CorrectionPair] {
+        let answer = try await Polisher.ask(instructions: MisheardJudge.instructions,
+                                            question: MisheardJudge.question(heard: heard, delivered: delivered, pairs: pairs),
+                                            account: current, options: options, session: session)
+        return MisheardJudge.misheard(in: answer, asked: pairs)
+    }
+
     public var health: HubHealth.ChatGPT { Self.health(of: current) }
 
     static func health(of account: ChatGPTAccount) -> HubHealth.ChatGPT {
         if account.isReady { return HubHealth.ChatGPT(ready: true, account: account.maskedEmail) }
         return HubHealth.ChatGPT(ready: false, problem: HubLoginText.notSignedIn)
     }
+}
+
+extension HubPolishing {
+    /// A polisher that cannot judge (a test stub) judges nothing misheard.
+    public func judge(heard: String, delivered: String, pairs: [CorrectionPair],
+                      options: PolishOptions) async throws -> [CorrectionPair] { [] }
 }
 
 /// What the hub says about its ChatGPT login (`HubHealth.ChatGPT.problem`): the cause alone. What it means for a

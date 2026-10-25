@@ -38,8 +38,8 @@ neoless 是一个 Mac 菜单栏里的语音输入：**轻按 fn 开始说话，�
 </p>
 
 - **三种模式**：自然整理（默认）、结构化（在 Claude、ChatGPT、Codex、Cursor、终端里自动使用，把口述整理成给 AI 的请求，只整理、不回答）、原样转写。
-- **个人词典和学习**：词典里的词同时交给识别和整理；把打错的字改对一次就记住；「我的习惯」用一句话写下偏好，比如“聊天软件里句末不要句号”“把所有的吧换成罢”。
-- **今日概览**：今天说了多少字、省了多少时间，近 7 天 / 30 天的柱状图，一年的打卡格子。
+- **个人词典和学习**：词典里的词同时交给识别和整理；把打错的字改对一次就记住，读音不像、规则拿不准的改动交给 ChatGPT 对照原话判断是不是听错；「我的习惯」用一句话写下偏好，比如“聊天软件里句末不要句号”“把所有的吧换成罢”。
+- **今日概览**：今天说了多少字、省了多少时间，近 7 天 / 30 天 / 全部的柱状图，一年的打卡格子。
 - **处理中心（可选）**：在另一台 Apple 芯片的 Mac 上跑 Qwen3-ASR（MLX）和整理；连不上时自动退回本机，不会丢字。
 
 ## 截图
@@ -204,7 +204,7 @@ fn ─▶ 麦克风（16 kHz）
 | **配对密钥** | — | Mac 的登录钥匙串；处理中心只存 SHA-256 |
 
 - 用处理中心时，TLS 在 Cloudflare 边缘终结再经隧道到你的 Mac，所以 **Cloudflare 在技术上能看到这些流量**；录音不发给任何语音识别厂商。
-- **自动学习** 通过辅助功能读一会儿你刚改过的输入框（最多约 2 分钟），只记“错词 → 正确词”，周围的文字只留长度和哈希；密码框和密码管理器从不读，密码、验证码、金额、网址这类内容不学。可以关掉。
+- **自动学习** 通过辅助功能读一会儿你刚改过的输入框（最多约 5 分钟，改完马上发送也算），只记“错词 → 正确词”，周围的文字只留长度和哈希；密码框和密码管理器从不读，密码、验证码、金额、网址这类内容不学。规则拿不准的改动只把那几个词发到你自己的处理中心，由它的 ChatGPT 对照当时识别听到的原文判断；数字、否定、人名地名这类不会拿去问。可以关掉。
 - 今日概览的数字只存在本机的 `usage.json`，里面没有任何文字。细节见 [docs/hub.md](docs/hub.md)。
 
 ## 常见问题
@@ -309,7 +309,7 @@ neoless --snapshot /tmp/snap                                    # 把每个页�
 **neoless** is a dictation app for the Mac menu bar: tap fn, speak, tap fn again, and tidied text is typed where your cursor was. It is built for Mandarin mixed with English names and terms; the interface is in Chinese.
 
 - **Tidies, not just transcribes.** Fillers go, self-corrections resolve (“three, no, four o'clock” → 4 点), misheard names are fixed from your word list (Open Air → OpenAI), long passages become paragraphs and numbered items, digits read out become numbers and spoken sums become `5*5=25`. Requests dictated to AI apps are turned into clear prompts, never answered.
-- **Learns from you.** A word you correct once is remembered; writing preferences you jot down (“我的习惯”) go with every request; everything learned is visible and removable.
+- **Learns from you.** A word you correct once is remembered, and a fix the rules cannot judge by sound is checked by ChatGPT against what was actually heard; writing preferences you jot down (“我的习惯”) go with every request; everything learned is visible and removable.
 - **Fast.** Short sentences are tidied on the spot without a model call, and recognition warms up as you press the key.
 - **Your audio stays yours.** On its own the app uses Apple's on-device recognition and your own AI account. Paired with **neoless-hub** on another Apple-silicon Mac of yours, audio goes there instead (Qwen3-ASR on MLX), through a Cloudflare Tunnel with Cloudflare Access in front. No speech-recognition vendor is involved; if the hub is out of reach, the Mac does it all.
 - **Get started:** `git clone https://github.com/harrrii/neoless-app.git ~/neoless && ~/neoless/scripts/install-mac.sh` (Apple silicon, macOS 15.2+ to build, Command Line Tools only).

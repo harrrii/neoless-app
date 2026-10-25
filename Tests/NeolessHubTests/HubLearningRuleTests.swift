@@ -158,7 +158,7 @@ import Testing
         #expect(restarted.observe(LearningObservations(pairs: [pair("Open Air", "OpenAI")], id: UUID())).accepted == 1)
         #expect(restarted.learning.pairs.map(\.count) == [2])
         // It says which version it is: a device offers an updated hub once more what it turned down before.
-        #expect(HubService.version == "1.3.0")
+        #expect(HubService.version == "1.4.0")
     }
 
     @Test func theReverseOfAPairIsOnlyEverACountDown() async throws {

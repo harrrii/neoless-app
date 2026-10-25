@@ -21,6 +21,11 @@ public struct LearnedCorrection: Codable, Identifiable, Equatable, Sendable {
         /// error, so only ever a hint for the model ("用户两次把 X 改成 Y"), never written into text without
         /// it, and its word is not put in the dictionary.
         public static let repeated = Kind(rawValue: "repeated")
+        /// The user typed `right` over `wrong` once, the rules could not tell whether that was a recognition
+        /// error (the two do not sound alike, or a name was typed over everyday words), and ChatGPT, given what
+        /// the recognizer heard, judged that it was (`POST /v1/learning/judge`). Used like a correction learned
+        /// by the rules, and kept to what no rule forbids (`CorrectionExtractor.isJudgeable`).
+        public static let judged = Kind(rawValue: "judged")
     }
 
     public var id: UUID
@@ -34,7 +39,8 @@ public struct LearnedCorrection: Codable, Identifiable, Equatable, Sendable {
     public var addedTerm: Bool
     /// Dictation records that already counted toward `count`, oldest first (bounded).
     public var recordIDs: [UUID]
-    /// Nil for a correction learned by the rules; `.repeated` for a swap made twice.
+    /// Nil for a correction learned by the rules; `.repeated` for a swap made twice; `.judged` for one ChatGPT
+    /// judged misheard.
     public var kind: Kind?
 
     public init(id: UUID = UUID(), pair: CorrectionPair, count: Int = 1, firstSeen: Date, lastSeen: Date,
@@ -45,6 +51,8 @@ public struct LearnedCorrection: Codable, Identifiable, Equatable, Sendable {
 
     /// Learned from a swap made twice: a hint only (`Kind.repeated`).
     public var isRepeated: Bool { kind == .repeated }
+    /// Judged misheard by ChatGPT (`Kind.judged`).
+    public var isJudged: Bool { kind == .judged }
 }
 
 /// A word learned without a mapping (`TermFix.termOnly`: Nio typed over 你好, a capital given to cursor). It
@@ -267,7 +275,7 @@ public struct LearningBook: Codable, Equatable, Sendable {
     /// reported as the reverse of a swap (`LearningEvent.reversedSwaps`).
     public mutating func record(_ pairs: [CorrectionPair], terms words: [String] = [], sightings capitals: [String] = [],
                                 candidates swaps: [CorrectionPair] = [], repeated twice: [CorrectionPair] = [],
-                                source: LearnedCorrection.Source,
+                                judged: [CorrectionPair] = [], source: LearnedCorrection.Source,
                                 recordID: UUID?, now: Date = Date(), calendar: Calendar = .current,
                                 heldElsewhere: [CorrectionPair] = [], repeatedElsewhere: [CorrectionPair] = [],
                                 termExists: (String) -> Bool) -> LearningEvent {
@@ -287,8 +295,9 @@ public struct LearningBook: Codable, Equatable, Sendable {
                 + terms.filter { calendar.isDate($0.firstSeen, inSameDayAs: now) }.count
         }
         var seen = Set<String>()
-        let unique = pairs.filter { seen.insert(Self.key($0)).inserted }
-        for pair in unique.prefix(Self.maxPairsPerEvent) {
+        let unique = (pairs.map { ($0, LearnedCorrection.Kind?.none) } + judged.map { ($0, LearnedCorrection.Kind?.some(.judged)) })
+            .filter { seen.insert(Self.key($0.0)).inserted }
+        for (pair, kind) in unique.prefix(Self.maxPairsPerEvent) {
             let k = Self.key(pair)
             let reversed = CorrectionPair(wrong: pair.right, right: pair.wrong)
             let caseOnly = k == Self.key(reversed)
@@ -314,7 +323,8 @@ public struct LearningBook: Codable, Equatable, Sendable {
                     continue
                 }
                 let item = LearnedCorrection(pair: pair, firstSeen: now, lastSeen: now, source: source,
-                                             addedTerm: !termExists(pair.right), recordIDs: recordID.map { [$0] } ?? [])
+                                             addedTerm: !termExists(pair.right), recordIDs: recordID.map { [$0] } ?? [],
+                                             kind: kind)
                 items.insert(item, at: 0)
                 event.added.append(item.id)
                 event.learned.append(pair)
@@ -641,8 +651,10 @@ public struct LearningBook: Codable, Equatable, Sendable {
             // A swap made twice is no recognition error by the rules and need not be one: it is judged by
             // what a rule forbids (a number, a negation, an opposite, a secret…), which also holds for one
             // an older version or another device stored.
-            let exact = (item.isRepeated ? "2\u{1F}" : "") + item.pair.wrong + "\u{1F}" + item.pair.right
+            // One ChatGPT judged misheard is held to the same: the rules could not tell, and it said yes.
+            let exact = (item.isRepeated ? "2\u{1F}" : item.isJudged ? "j\u{1F}" : "") + item.pair.wrong + "\u{1F}" + item.pair.right
             let passes = verdicts[exact] ?? (item.isRepeated ? extractor.isRepeatable(item.pair, knownTerms: knownTerms)
+                                             : item.isJudged ? extractor.isJudgeable(item.pair, knownTerms: knownTerms)
                                              : extractor.strength(of: item.pair, knownTerms: knownTerms) == .pair)
             verdicts[exact] = passes
             if passes { usable.insert(key) } else { out.insert(key) }
@@ -774,8 +786,9 @@ public enum LearningPrompt {
     public static func applyConfirmed(_ text: String, book: LearningBook) -> String {
         var latest: [String: LearnedCorrection] = [:]
         let said = normalize(text)
-        // A swap made twice is not known to be a recognition error: a hint only, whatever it looks like.
-        for item in book.items where item.count >= confirmedCount && !item.isRepeated {
+        // A swap made twice is not known to be a recognition error: a hint only, whatever it looks like. One
+        // ChatGPT judged misheard was judged in one sentence: a hint for the model too.
+        for item in book.items where item.count >= confirmedCount && !item.isRepeated && !item.isJudged {
             let wrong = normalize(item.pair.wrong)
             guard !wrong.isEmpty, !item.pair.right.isEmpty, said.contains(wrong),
                   CorrectionExtractor.replacesBlindly(item.pair) else { continue }

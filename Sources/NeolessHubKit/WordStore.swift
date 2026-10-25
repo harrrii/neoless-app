@@ -136,12 +136,14 @@ public final class WordStore {
     /// and learned the second (`LearningBook.record`). `candidates`: swaps an edit made that the rules neither
     /// take nor forbid, remembered the first time and learned as a hint the second (in another dictation).
     /// `repeated`: swaps a device saw twice itself, learned as hints at once. Neither puts a word in the
-    /// dictionary. Returns nil when nothing changed.
+    /// dictionary. `judged`: swaps ChatGPT judged misheard (`LearnedCorrection.Kind.judged`), learned like `pairs`.
+    /// Returns nil when nothing changed.
     @discardableResult
     public func learn(_ pairs: [CorrectionPair], terms: [String] = [], sightings: [String] = [],
-                      candidates: [CorrectionPair] = [], repeated: [CorrectionPair] = [],
+                      candidates: [CorrectionPair] = [], repeated: [CorrectionPair] = [], judged: [CorrectionPair] = [],
                       source: LearnedCorrection.Source, recordID: UUID?) -> LearningEvent? {
-        guard !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty || !repeated.isEmpty else { return nil }
+        guard !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty || !repeated.isEmpty
+                || !judged.isEmpty else { return nil }
         var pairs = pairs
         // A→B then B→C in one dictation (a fix fixed again): learn A→C instead of both.
         if let recordID, let (earlier, composed) = recent.reversed().lazy
@@ -156,7 +158,7 @@ public final class WordStore {
         let existing = Set(words.map { $0.lowercased() }).subtracting(learnedTerms)
         var next = book
         let event = next.record(pairs, terms: terms, sightings: sightings, candidates: candidates, repeated: repeated,
-                                source: source, recordID: recordID, now: now()) {
+                                judged: judged, source: source, recordID: recordID, now: now()) {
             existing.contains($0.lowercased())
         }
         guard !event.isEmpty else { return nil }

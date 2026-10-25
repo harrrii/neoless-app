@@ -160,6 +160,23 @@ final class LearningStore: ObservableObject {
     var onForget: (([String]) -> Void)?
     /// One line for the capsule (`AppDelegate`).
     var onAnnounce: ((Announcement) -> Void)?
+    /// Words typed over others that the rules could not tell from a change of mind (`Extraction.doubts`), from
+    /// one edit: `HubSync` asks the Neo, whose ChatGPT decides, and answers with `judged(_:_:)`.
+    var onJudge: ((Doubt) -> Void)?
+    /// Whether the Neo can be asked about the words of dictation record `id` (`onJudge`): paired, 用 Neo 处理
+    /// on, and the record is one of the Neo's dictations.
+    var canJudge: ((UUID) -> Bool)?
+
+    /// What `onJudge` carries.
+    struct Doubt {
+        var pairs: [CorrectionPair]
+        var recordID: UUID
+        var app: String?
+        var source: LearnedCorrection.Source
+        /// Why the rules learned nothing from the edit, when nothing else was learned or noted from it: kept
+        /// in the log only once the answer says it was not misheard (or there is no answer).
+        var nothing: Extraction.Nothing?
+    }
     /// The user changed 我的习惯 here: `HubSync` takes them to the Neo.
     var onHabitsChange: (() -> Void)?
     private let vocabulary: VocabularyStore
@@ -264,6 +281,16 @@ final class LearningStore: ObservableObject {
         guard enabled else { return [] }
         let place = source == .inApp ? nil : app
         takeBackSwaps(in: earlier, goneFrom: found)
+        // Words the rules could not decide about go to ChatGPT on the Neo, once what the rules made of this edit
+        // is in the book. Not one the user deleted from this dictation, nor one held already.
+        let held = Set(promptBook.items.map { LearningBook.key($0.pair) })
+        let doubts = found.doubts.filter { !isDismissed($0, from: recordID) && !held.contains(LearningBook.key($0)) }
+        let asking = recordID.flatMap { id in !doubts.isEmpty && canJudge?(id) == true ? id : nil }
+        /// Why nothing was learned, kept until the answer comes.
+        var waiting: Extraction.Nothing?
+        defer {
+            if let asking { onJudge?(Doubt(pairs: doubts, recordID: asking, app: app, source: source, nothing: waiting)) }
+        }
         var events: [LearningEvent] = []
         /// The day's new corrections were used up for something in this edit.
         var limited = false
@@ -310,7 +337,11 @@ final class LearningStore: ObservableObject {
                 // text again, the swap in it was said to be remembered then, and "没记" now would deny it.
                 // Nor for one the user deleted from this dictation: they know.
                 if events.isEmpty, !accounted(found.candidates, from: recordID) {
-                    noteNothing(nothing, source: source, recordID: recordID, app: app)
+                    if asking != nil {
+                        waiting = nothing
+                    } else {
+                        noteNothing(nothing, source: source, recordID: recordID, app: app)
+                    }
                 }
             } else if events.contains(where: { !$0.noted.isEmpty }) {
                 // A capital seen for the first time, which is learned when it is given again.
@@ -398,6 +429,32 @@ final class LearningStore: ObservableObject {
         if source != .inApp, let line = current(.noted(pairs: noted)) { onAnnounce?(line) }
     }
 
+    /// The Neo's answer about `doubt` (nil: none came: not reachable, a Neo from before, ChatGPT failed). What it
+    /// judged misheard and learned is learned here too (`LearnedCorrection.Kind.judged`), without being sent
+    /// back, and said like any learned word; what it judged not misheard is kept in the log when the rules had
+    /// learned nothing else from the edit.
+    func judged(_ answer: LearningJudgeResponse?, _ doubt: Doubt) {
+        guard enabled else { return }
+        let place = doubt.source == .inApp ? nil : doubt.app
+        guard let answer else {
+            if let nothing = doubt.nothing { noteNothing(nothing, source: doubt.source, recordID: doubt.recordID, app: doubt.app) }
+            return
+        }
+        let asked = Set(doubt.pairs.map(LearningBook.key))
+        let yes = answer.learned.filter { asked.contains(LearningBook.key($0)) }
+        if !yes.isEmpty {
+            let event = record(pairs: [], terms: [], judged: yes, source: doubt.source, recordID: doubt.recordID).event
+            let learned = event?.learned ?? []
+            let entry = record(.judged, app: place, count: max(learned.count, yes.count))
+            if let event { logged[event.id] = entry }
+            if doubt.source != .inApp, let line = current(.learned(pairs: learned, terms: [])) { onAnnounce?(line) }
+        } else if !answer.overLimit.isEmpty {
+            record(.dailyLimit, app: place)
+        } else if doubt.nothing != nil {
+            record(.judgedNo, app: place)
+        }
+    }
+
     /// Records `pairs` from one settled edit and adds their terms to the dictionary.
     @discardableResult
     func learn(pairs: [CorrectionPair], source: LearnedCorrection.Source, recordID: UUID?) -> LearningEvent? {
@@ -410,9 +467,14 @@ final class LearningStore: ObservableObject {
     /// new corrections are used up.
     /// `candidates`: swaps the rules neither take nor forbid, remembered the first time and learned as hints
     /// the second (`LearningBook.record`); nothing of them goes into the dictionary.
+    /// `judged`: what ChatGPT on the Neo judged misheard and the Neo learned already (`judged(_:_:)`): learned
+    /// here the same way, and not sent to the Neo again.
     private func record(pairs: [CorrectionPair], terms: [String], sightings: [String] = [], candidates: [CorrectionPair] = [],
-                        source: LearnedCorrection.Source, recordID: UUID?) -> (event: LearningEvent?, limited: Bool) {
-        guard enabled, !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty else { return (nil, false) }
+                        judged: [CorrectionPair] = [], source: LearnedCorrection.Source,
+                        recordID: UUID?) -> (event: LearningEvent?, limited: Bool) {
+        guard enabled, !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty || !judged.isEmpty else {
+            return (nil, false)
+        }
         var pairs = pairs
         var change = Change(recordID: recordID)
         // A→B then B→C in one record (say a wrong IME candidate fixed again): learn A→C instead of both.
@@ -421,7 +483,7 @@ final class LearningStore: ObservableObject {
             .compactMap({ e in LearningBook.chained(pairs, after: e.event.learned).map { (e.event, $0) } }).first {
             revert(earlier, into: &change)
             pairs = composed
-            guard !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty else {
+            guard !pairs.isEmpty || !terms.isEmpty || !sightings.isEmpty || !candidates.isEmpty || !judged.isEmpty else {
                 report(change)
                 return (nil, false)
             }
@@ -432,8 +494,8 @@ final class LearningStore: ObservableObject {
         var next = book
         // The reverse of a correction only the Neo has weakens that one there; it is never learned here as a
         // mapping of its own, which would leave this Mac and the Neo contradicting each other.
-        let event = next.record(pairs, terms: terms, sightings: sightings, candidates: candidates, source: source,
-                                recordID: recordID, heldElsewhere: hubEntries.map(\.pair),
+        let event = next.record(pairs, terms: terms, sightings: sightings, candidates: candidates, judged: judged,
+                                source: source, recordID: recordID, heldElsewhere: hubEntries.map(\.pair),
                                 repeatedElsewhere: hubEntries.filter { $0.kind == .repeated }.map(\.pair)) {
             existing.contains($0.lowercased())
         }
@@ -452,7 +514,9 @@ final class LearningStore: ObservableObject {
         undoable = Array((undoable + [(event, recordID, source)]).suffix(20))
         commit()
         change.unlearned += event.reversed
-        change.learned += event.learned + event.terms.map(Change.word)
+        // The Neo learned what it judged itself.
+        let fromNeo = Set(judged.map(LearningBook.key))
+        change.learned += event.learned.filter { !fromNeo.contains(LearningBook.key($0)) } + event.terms.map(Change.word)
         change.repeated += event.promoted
         report(change)
         return (event, limited)

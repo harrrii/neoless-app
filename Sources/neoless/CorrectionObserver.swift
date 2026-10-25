@@ -5,6 +5,7 @@ import Combine
 import CryptoKit
 import Foundation
 import NeolessCore
+import os
 
 /// Watches the passage neoless just pasted into another app and learns the user's term fixes.
 ///
@@ -93,6 +94,8 @@ final class CorrectionObserver {
         /// What has the focus instead of the field, once it was looked at and found not to be the field: it
         /// is not read again while focus stays on it.
         var elsewhere: AX.Element?
+        /// How the looks went, for one line in the system log when the watch ends (`WatchTrace`).
+        var trace = WatchTrace()
 
         init(generation: Int, probe: Probe, recordID: UUID, appName: String?, inserted: String) {
             self.generation = generation
@@ -387,6 +390,7 @@ final class CorrectionObserver {
         if let target = look.target { session.target = target }
         if look.focused || look.elsewhere != nil { session.elsewhere = look.elsewhere }
         let now = uptime
+        session.trace.note(look.reading, focused: look.focused, last: watch.passage)
         var step = watch.take(look.reading, at: now, focused: look.focused)
         if let reason = session.finishing {
             if case .settled(let text) = step { evaluate(session, text) }
@@ -397,9 +401,11 @@ final class CorrectionObserver {
         case .wait:
             scheduleTick(gen)
         case .settled(let text):
+            session.trace.settled += 1
             evaluate(session, text)
             scheduleTick(gen)
-        case let .end(_, flush):
+        case let .end(reason, flush):
+            session.trace.end(reason, flushed: flush != nil, app: session.appName, seconds: now - session.started)
             session.ended = true
             if current == gen { current = nil }
             if let flush { evaluate(session, flush) }
@@ -482,6 +488,40 @@ final class CorrectionObserver {
 }
 
 // MARK: - Anchor
+
+/// How one watch went, said in one line of the system log when it ends (`log show --predicate
+/// 'subsystem == "app.neoless"'`): how many looks found the passage in the field with focus there, from afar, with
+/// an input method composing, or found focus moved, no answer, the passage lost; how many changes were seen in
+/// each of those ways, and how many texts settled. Counts, the app's name and why it ended: never the text.
+struct WatchTrace {
+    static let log = Logger(subsystem: "app.neoless", category: "learning")
+    var focused = 0, afar = 0, composing = 0, moved = 0, failed = 0, lost = 0
+    var changedFocused = 0, changedAfar = 0, settled = 0
+
+    mutating func note(_ reading: PassageWatch.Reading, focused isFocused: Bool, last: String) {
+        switch reading {
+        case let .passage(text, isComposing):
+            if isFocused { focused += 1 } else { afar += 1 }
+            if isComposing { composing += 1 }
+            if text != last {
+                if isFocused { changedFocused += 1 } else { changedAfar += 1 }
+            }
+        case .moved: moved += 1
+        case .failed: failed += 1
+        case .lost, .empty: lost += 1
+        }
+    }
+
+    func end(_ reason: PassageWatch.End, flushed: Bool, app: String?, seconds: TimeInterval) {
+        Self.log.notice("""
+            watch end=\(reason.rawValue, privacy: .public) app=\(app ?? "-", privacy: .public) \
+            s=\(Int(seconds), privacy: .public) looks=\(focused, privacy: .public)/\(afar, privacy: .public) \
+            composing=\(composing, privacy: .public) moved=\(moved, privacy: .public) failed=\(failed, privacy: .public) \
+            lost=\(lost, privacy: .public) changes=\(changedFocused, privacy: .public)/\(changedAfar, privacy: .public) \
+            settled=\(settled, privacy: .public) flushed=\(flushed, privacy: .public)
+            """)
+    }
+}
 
 /// Where the passage sits: lengths and hashes of the text before and after it, never the text.
 struct InsertionAnchor: Sendable {

@@ -66,13 +66,21 @@ enum Dash {
     static var _debugHoveredRow: UUID?
 }
 
-/// The days the chart shows.
+/// The days the chart shows. A range's number is how many days (what is remembered between launches);
+/// 全部's is none.
 enum ChartRange: Int, CaseIterable, Identifiable {
     case week = 7
     case month = 30
+    case all = -1
 
     var id: Int { rawValue }
-    var title: String { self == .week ? "近 7 天" : "近 30 天" }
+    var title: String {
+        switch self {
+        case .week: return "近 7 天"
+        case .month: return "近 30 天"
+        case .all: return "全部"
+        }
+    }
 }
 
 extension UsageMetric {
@@ -279,7 +287,8 @@ struct StatTiles: View {
 
 // MARK: - Bar chart
 
-/// 近 7 天 / 近 30 天, by 次数, 字数 or 时长: one bar a day, today's in the accent colour.
+/// 近 7 天 / 近 30 天 / 全部, by 次数, 字数 or 时长: one bar a day (全部 over a longer time: a week or a
+/// month), today's in the accent colour.
 struct UsageChartCard: View {
     @EnvironmentObject var usage: UsageStore
     @EnvironmentObject var router: Router
@@ -294,8 +303,11 @@ struct UsageChartCard: View {
 
     var body: some View {
         let range = router.chartRange, metric = router.chartMetric
-        let points = usage.stats.series(days: range.rawValue, endingOn: usage.today)
-        let summary = usage.stats.summary(metric, of: points)
+        let chart: (period: UsagePeriod, points: [UsagePoint]) = range == .all
+            ? usage.stats.everything(endingOn: usage.today, firstWeekday: usage.firstWeekday)
+            : (.day, usage.stats.series(days: range.rawValue, endingOn: usage.today))
+        let period = chart.period, points = chart.points
+        let summary = range == .all ? usage.stats.summary(metric, upTo: usage.today) : usage.stats.summary(metric, of: points)
         let pointed = (Dash._debugHoveredBar ?? hovered).flatMap { points.indices.contains($0) ? $0 : nil }
         Surface {
             VStack(alignment: .leading, spacing: 0) {
@@ -315,7 +327,7 @@ struct UsageChartCard: View {
                     // The bar under the pointer, spelled out: the day and its amount.
                     if let pointed {
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(UsageText.day(points[pointed].date))
+                            Text(UsageText.period(points[pointed].date, period, asOf: usage.today))
                             Text(points[pointed].usage.isEmpty ? "没有听写"
                                  : UsageText.plain(UsageText.amount(metric.value(of: points[pointed].usage), metric: metric)))
                                 .foregroundStyle(.primary)
@@ -328,7 +340,7 @@ struct UsageChartCard: View {
                 }
                 .padding(.top, Space.m)
                 Spacer(minLength: Space.s)
-                BarPlot(points: points, metric: metric, today: usage.today, pointed: pointed, hovered: $hovered,
+                BarPlot(points: points, period: period, metric: metric, today: usage.today, pointed: pointed, hovered: $hovered,
                         barsHeight: min(Dash.tallestBar, max(48, height - Self.chrome)), emptyHint: emptyHint(range))
             }
             // The controls' centre is 28pt under the card's top: the line 最近听写 and 过去一年 have their titles on.
@@ -367,14 +379,15 @@ struct UsageChartCard: View {
 
     /// Said where the bars would be when these days have none; for a new user, what will be drawn there.
     private func emptyHint(_ range: ChartRange) -> String? {
-        usage.stats.days.isEmpty ? "每天的听写量会显示在这里" : "\(range.title)没有听写"
+        usage.stats.days.isEmpty ? "每天的听写量会显示在这里" : (range == .all ? "还没有听写" : "\(range.title)没有听写")
     }
 }
 
-/// The bars: one slot a day, oldest on the left. Seven days are all labelled with their value; thirty
-/// label the busiest day and today, and the rest answer to the pointer.
+/// The bars: one slot a day (or a week, or a month), oldest on the left. Seven are all labelled with their
+/// value; more label the busiest and today's, and the rest answer to the pointer.
 private struct BarPlot: View {
     let points: [UsagePoint]
+    let period: UsagePeriod
     let metric: UsageMetric
     let today: UsageDate
     let pointed: Int?
@@ -399,7 +412,8 @@ private struct BarPlot: View {
             HStack(alignment: .top, spacing: 0) {
                 ForEach(Array(points.enumerated()), id: \.element.id) { i, point in
                     let value = values[i]
-                    let isToday = point.date == today
+                    // A week's or a month's bar: the one today is in, which is the last.
+                    let isToday = period == .day ? point.date == today : i == points.count - 1
                     // A label wider than its slot (a month's bars are thin) stays inside the plot at both ends.
                     let anchor: Alignment = i == 0 ? .leading : (i == points.count - 1 ? .trailing : .center)
                     VStack(spacing: 0) {
@@ -424,7 +438,7 @@ private struct BarPlot: View {
                             }
                         }
                         .frame(height: barsHeight)
-                        Text(axisLabel(i, point.date) ?? " ")
+                        Text(axisLabel(i, point.date, isToday: isToday) ?? " ")
                             .font(Typo.chartLabel)
                             .fontWeight(isToday ? .medium : .regular)
                             .foregroundStyle(isToday ? AnyShapeStyle(.primary) : AnyShapeStyle(Theme.chartLabel))
@@ -434,7 +448,7 @@ private struct BarPlot: View {
                     }
                     .frame(width: slot)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(UsageText.day(point.date))
+                    .accessibilityLabel(UsageText.period(point.date, period, asOf: today))
                     .accessibilityValue(UsageText.plain(UsageText.amount(value, metric: metric)))
                 }
             }
@@ -490,10 +504,23 @@ private struct BarPlot: View {
     }
 
     /// Under a week's bars: the weekday, and 今天. Under a month's: a date every seventh day back from today.
-    private func axisLabel(_ i: Int, _ date: UsageDate) -> String? {
-        if date == today { return "今天" }
-        if points.count <= 7 { return UsageText.weekdayCharacter(date.weekday) }
-        return (points.count - 1 - i) % 7 == 0 ? "\(date.month)/\(date.day)" : nil
+    /// Weeks (全部): 本周, and the first day of every fourth week back. Months: 本月, and about six more,
+    /// January by its year.
+    private func axisLabel(_ i: Int, _ date: UsageDate, isToday: Bool) -> String? {
+        let back = points.count - 1 - i
+        switch period {
+        case .day:
+            if isToday { return "今天" }
+            if points.count <= 7 { return UsageText.weekdayCharacter(date.weekday) }
+            return back % 7 == 0 ? "\(date.month)/\(date.day)" : nil
+        case .week:
+            if isToday { return "本周" }
+            return back % 4 == 0 ? "\(date.month)/\(date.day)" : nil
+        case .month:
+            if isToday { return "本月" }
+            guard back % max(1, (points.count + 5) / 6) == 0 else { return nil }
+            return date.month == 1 ? "\(date.year)年" : "\(date.month)月"
+        }
     }
 }
 

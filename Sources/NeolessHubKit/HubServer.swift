@@ -90,6 +90,11 @@ public enum HubServer {
             return try json(await service.observe(body))
         }
 
+        router.post(RouterPath(HubPath.learningJudge)) { request, _ in
+            let body = try await decode(LearningJudgeRequest.self, from: request)
+            return try json(await service.judge(body))
+        }
+
         router.get(RouterPath(HubPath.learning)) { _, _ in try json(await service.learning) }
 
         router.post(RouterPath(HubPath.learningForget)) { request, _ in

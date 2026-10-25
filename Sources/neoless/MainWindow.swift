@@ -2168,7 +2168,7 @@ struct DictionaryView: View {
                         switch row {
                         case .correction(let item):
                             LearnedRow(pair: item.pair, detail: Self.detail(item.lastSeen, count: item.count, repeated: item.isRepeated),
-                                       tags: tags(for: item.pair, repeated: item.isRepeated, hub: false)) {
+                                       tags: tags(for: item.pair, repeated: item.isRepeated, judged: item.isJudged, hub: false)) {
                                 learning.remove(id: item.id)
                             }
                         case .waiting(let swap):
@@ -2184,7 +2184,7 @@ struct DictionaryView: View {
                         if i > 0 || !rows.isEmpty { RowDivider(inset: Inset.card) }
                         let repeated = entry.kind == .repeated
                         LearnedRow(pair: entry.pair, detail: Self.detail(entry.lastSeen, count: entry.count, repeated: repeated),
-                                   tags: tags(for: entry.pair, repeated: repeated, hub: true)) {
+                                   tags: tags(for: entry.pair, repeated: repeated, judged: entry.kind == .judged, hub: true)) {
                             learning.removeFromHub(wrong: entry.wrong)
                         }
                     }
@@ -2245,9 +2245,9 @@ struct DictionaryView: View {
     /// is said, and nothing else. Otherwise how it was learned (a swap made twice), then where it is: the
     /// Neo's own (`hub`), or one of this Mac's that the Neo does not hold (as of the last sync), which is
     /// said because the Neo does the polishing.
-    private func tags(for pair: CorrectionPair, repeated: Bool, hub: Bool) -> [LearnedRow.Tag] {
+    private func tags(for pair: CorrectionPair, repeated: Bool, judged: Bool = false, hub: Bool) -> [LearnedRow.Tag] {
         if learning.isUnused(pair) { return [Self.unusedTag] }
-        var tags: [LearnedRow.Tag] = repeated ? [Self.repeatedTag] : []
+        var tags: [LearnedRow.Tag] = repeated ? [Self.repeatedTag] : judged ? [Self.judgedTag] : []
         if hub {
             tags.append(LearnedRow.Tag(text: "Neo", help: "Neo 上记着的纠正，用 Neo 处理时会用上"))
         } else if let holding = learning.hubHolding(of: pair) {
@@ -2261,6 +2261,9 @@ struct DictionaryView: View {
     /// On a swap made once (grey: it is not in use), and on one made twice.
     private static let waitingTag = LearnedRow.Tag(text: LearningText.waitingTag, help: LearningText.waitingHelp, quiet: true)
     private static let repeatedTag = LearnedRow.Tag(text: LearningText.repeatedTag, help: LearningText.repeatedHelp)
+    /// On one ChatGPT judged misheard (`LearnedCorrection.Kind.judged`).
+    private static let judgedTag = LearnedRow.Tag(text: "ChatGPT 判断",
+                                                  help: "读音不像，规则拿不准；ChatGPT 对照当时听到的原话，判断是听错，所以记住了")
 
     /// The badge on a correction of this Mac's that the Neo does not hold.
     private static func hubTag(_ holding: HubLearning.Holding) -> String {
@@ -2563,7 +2566,7 @@ private struct LearningLogRow: View {
 
     private var kept: Kept {
         switch LearningLog.Code(rawValue: entry.code) {
-        case .learned, .repeated: return .learned
+        case .learned, .repeated, .judged: return .learned
         case .candidate: return .noted
         default: return .nothing
         }

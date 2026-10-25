@@ -46,6 +46,11 @@ public struct LearningLog: Codable, Equatable, Sendable {
         case repeated
         /// What was remembered of a swap was taken back: the user undid the edit.
         case candidateUndone
+        /// Words the rules could not decide about were judged misheard by ChatGPT on the Neo, and learned
+        /// (`LearnedCorrection.Kind.judged`). `count`: how many.
+        case judged
+        /// ChatGPT on the Neo judged that the words the user typed over others were not misheard.
+        case judgedNo
 
         public init(_ nothing: Extraction.Nothing) {
             switch nothing {
@@ -292,6 +297,8 @@ public enum LearningText {
         case .candidate: return "换了词，记下了：再这样改一次就记住"
         case .repeated: return "同样的词又改了一次，记住了 \(max(1, count)) 个"
         case .candidateUndone: return "记下的词已撤销"
+        case .judged: return "ChatGPT 判断是听错，记住了 \(max(1, count)) 个"
+        case .judgedNo: return "ChatGPT 看过：像是换了说法，不是听错，没记"
         }
     }
 }

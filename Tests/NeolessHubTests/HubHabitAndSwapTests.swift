@@ -322,6 +322,6 @@ import Testing
 
     @Test func itSaysWhichVersionItIs() {
         // Raised with the learning rules: a device then offers once more what an older hub turned down.
-        #expect(HubService.version == "1.3.0")
+        #expect(HubService.version == "1.4.0")
     }
 }

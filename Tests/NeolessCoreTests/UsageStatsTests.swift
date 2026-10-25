@@ -232,6 +232,54 @@ private func record(_ text: String, seconds: Double, at date: Date) -> Dictation
         UsageStats(days: counts.mapValues { UsageDay(count: $0, characters: $0 * 20, seconds: Double($0) * 6) }, backfilled: true)
     }
 
+    @Test func everythingIsDaysWhileThereAreFew() {
+        let today = day(2026, 10, 10)
+        let new = stats([today: 3, day(2026, 10, 8): 5]).everything(endingOn: today, firstWeekday: 1)
+        #expect(new.period == .day)
+        #expect(new.points.map(\.usage.count) == [0, 0, 0, 0, 5, 0, 3])
+        let sixty = stats([today.adding(days: -59): 1, today: 2]).everything(endingOn: today, firstWeekday: 1)
+        #expect(sixty.period == .day)
+        #expect(sixty.points.count == 60)
+        #expect(sixty.points.first?.date == today.adding(days: -59))
+        // Nothing counted yet: an empty week, as 近 7 天 draws it.
+        let none = UsageStats().everything(endingOn: today, firstWeekday: 1)
+        #expect(none.period == .day && none.points.count == 7)
+    }
+
+    @Test func everythingIsWeeksUpToAYear() {
+        let today = day(2026, 10, 10)                                          // a Saturday
+        let s = stats([day(2026, 8, 1): 2, day(2026, 8, 3): 5, today: 3])      // 8/1 a Saturday, 8/3 a Monday
+        let monday = s.everything(endingOn: today, firstWeekday: 2)
+        #expect(monday.period == .week)
+        #expect(monday.points.first?.date == day(2026, 7, 27))
+        #expect(monday.points.last?.date == day(2026, 10, 5))
+        #expect(monday.points.map(\.usage.count) == [2, 5, 0, 0, 0, 0, 0, 0, 0, 0, 3])
+        let sunday = s.everything(endingOn: today, firstWeekday: 1)
+        #expect(sunday.points.first?.date == day(2026, 7, 26))
+        #expect(sunday.points.last?.date == day(2026, 10, 4))
+        #expect(sunday.points.map(\.usage.count) == [2, 5, 0, 0, 0, 0, 0, 0, 0, 0, 3])
+    }
+
+    @Test func everythingIsMonthsAfterAYear() {
+        let today = day(2026, 10, 10)
+        // A day after today (a clock that was wrong) is in no bar.
+        let s = stats([day(2025, 8, 15): 2, day(2026, 1, 1): 1, day(2026, 1, 31): 4, today: 3, day(2026, 10, 12): 9])
+        let all = s.everything(endingOn: today, firstWeekday: 1)
+        #expect(all.period == .month)
+        #expect(all.points.count == 15)
+        #expect(all.points.first?.date == day(2025, 8, 1))
+        #expect(all.points[5].date == day(2026, 1, 1))
+        #expect(all.points[5].usage.count == 5)
+        #expect(all.points.last?.date == day(2026, 10, 1))
+        #expect(all.points.map(\.usage.count).reduce(0, +) == 10)
+        let summary = s.summary(.count, upTo: today)
+        #expect(summary.total == 10)
+        #expect(summary.dailyAverage == 10.0 / 422)
+        #expect(UsageText.period(day(2025, 8, 1), .month, asOf: today) == "2025年8月")
+        #expect(UsageText.period(day(2026, 1, 1), .month, asOf: today) == "1月")
+        #expect(UsageText.period(day(2026, 10, 5), .week, asOf: today) == "10月5日起一周")
+    }
+
     @Test func aSeriesEndsTodayAndFillsTheGaps() {
         let today = day(2026, 10, 10)
         let s = stats([today: 3, day(2026, 10, 8): 5, day(2026, 10, 3): 9, day(2026, 9, 12): 2])
