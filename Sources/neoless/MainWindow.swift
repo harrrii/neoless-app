@@ -1865,6 +1865,7 @@ struct HistoryView: View {
     @ViewBuilder private var detail: some View {
         if let id = selection, let record = history.records.first(where: { $0.id == id }) {
             HistoryDetail(record: record, onDelete: { delete(record.id) })
+                .id(record.id)
         } else {
             EmptyState(symbol: "text.alignleft", title: "选择一条记录", message: "在左边选一条，查看整理结果和原文。")
                 .frame(maxHeight: .infinity)
@@ -1957,6 +1958,8 @@ struct HistoryDetail: View {
     let record: DictationRecord
     var onDelete: (() -> Void)?
     @EnvironmentObject var history: HistoryStore
+    @EnvironmentObject var controller: DictationController
+    @State private var sound: NSSound?
 
     var body: some View {
         ScrollView {
@@ -2023,9 +2026,63 @@ struct HistoryDetail: View {
                 if let note = RecordNote.display(record.note) {
                     NoticeLine(symbol: "exclamationmark.circle.fill", tint: Theme.caution, text: note, inset: false)
                 }
+
+                if let file = controller.backup?.file(for: record.id) {
+                    recording(file)
+                }
             }
             .padding(Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onDisappear { sound?.stop() }
+    }
+
+    /// 录音备份: the saved recording, to hear, find in Finder, and send to the Neo again (`RecordingBackup`).
+    private func recording(_ file: URL) -> some View {
+        let busy = controller.rerecognizing == record.id
+        let failure = controller.rerecognizeFailure.flatMap { $0.id == record.id ? $0.message : nil }
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            Text("录音备份")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: Space.xs) {
+                Button {
+                    if let sound, sound.isPlaying { sound.stop(); self.sound = nil; return }
+                    let next = NSSound(contentsOf: file, byReference: true)
+                    next?.play()
+                    sound = next
+                    // The label goes back to 播放 once it has played through.
+                    if let next {
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: UInt64((next.duration + 0.3) * 1_000_000_000))
+                            if sound === next { sound = nil }
+                        }
+                    }
+                } label: {
+                    ToolLabel(title: sound?.isPlaying == true ? "停止" : "播放",
+                              symbol: sound?.isPlaying == true ? "stop.fill" : "play.fill")
+                }
+                .buttonStyle(.pushButton)
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([file])
+                } label: {
+                    ToolLabel(title: "在访达中显示", symbol: "folder")
+                }
+                .buttonStyle(.pushButton)
+                Spacer(minLength: Space.s)
+                Button {
+                    controller.rerecognize(record)
+                } label: {
+                    ToolLabel(title: busy ? "识别中…" : "用 Neo 重新识别", symbol: busy ? nil : "waveform")
+                }
+                .buttonStyle(.pushButton)
+                .disabled(!controller.canRerecognize(record))
+                .help("把这段录音再交给 Neo 用大模型识别一遍，结果替换这条记录")
+            }
+            .controlSize(.regular)
+            Text(failure.map { "没有重新识别：\($0)" } ?? "只留最近 \(RecordingBackup.keep) 条录音，删除记录时录音一起删")
+                .font(Typo.caption)
+                .foregroundStyle(failure == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.caution))
         }
     }
 

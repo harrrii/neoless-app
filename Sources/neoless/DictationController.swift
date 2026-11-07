@@ -71,6 +71,12 @@ final class DictationController: ObservableObject {
     let usage: UsageStore?
     /// Takes edits of the Neo's dictations to the Neo (set by AppDelegate).
     var hubSync: HubSync?
+    /// 录音备份: the last recordings, kept the moment the user stops (set by AppDelegate; nil for snapshots).
+    var backup: RecordingBackup?
+    /// The history record being recognised again from its saved recording (`rerecognize`).
+    @Published private(set) var rerecognizing: UUID?
+    /// Why the last 重新识别 did not work, for the record it was asked for.
+    @Published private(set) var rerecognizeFailure: (id: UUID, message: String)?
 
     /// One dictation from start to delivery.
     private struct Take {
@@ -290,6 +296,67 @@ final class DictationController: ObservableObject {
                 updated.note = PolishFailure.detail(error)
                 current = updated
             }
+        }
+    }
+
+    /// Whether history record `record` has its recording saved (`RecordingBackup`) and the Neo to hear it again.
+    func canRerecognize(_ record: DictationRecord) -> Bool {
+        guard rerecognizing == nil, backup?.file(for: record.id) != nil, let hub, hub.dictationClient != nil else { return false }
+        if case .unreachable = hub.status { return false }
+        return true
+    }
+
+    /// 用 Neo 重新识别: the saved recording goes to the Neo again, with the large model when it has one (who asks
+    /// again wants it right, and waits), and the record takes the Neo's text in place of what it had. A long
+    /// recording outlasts one call (Cloudflare ends it at 100 s): asked again under the same id, the Neo answers
+    /// with the job it is running (`HubDictation.waitsLonger`).
+    func rerecognize(_ record: DictationRecord) {
+        guard rerecognizing == nil, let client = hub?.dictationClient, let saved = backup?.load(record.id) else { return }
+        rerecognizing = record.id
+        rerecognizeFailure = nil
+        let large: HubASRModel? = NeoModelChoice.large.asked(of: hub?.modelSupport ?? .unknown).requested
+        let request = DictationRequest(mode: record.mode, autoStructured: false, appName: record.appName,
+                                       locale: settings.localeID, durationSeconds: record.duration,
+                                       clientRecordingID: UUID(), client: .mac, clientVersion: AppVersion.current,
+                                       polishModel: settings.model, fastTier: settings.fastTier)
+            .asking(for: large ?? hub?.askedModel)
+        Task {
+            defer { rerecognizing = nil }
+            let began = Date()
+            let patience = HubTimeouts.largeModelPatience(audioSeconds: record.duration)
+            var result: DictationResult?
+            var failure: Error?
+            while result == nil {
+                do {
+                    result = try await client.dictate(audio: saved.data, type: saved.type, request: request)
+                } catch let error where HubDictation.asksAgain(error, request: request)
+                            && Date().timeIntervalSince(began) < patience {
+                    if (error as? HubError) != .timeout { try? await Task.sleep(nanoseconds: 3_000_000_000) }
+                } catch {
+                    failure = error
+                    break
+                }
+            }
+            guard let result, !result.raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                if let failure { hub?.note(failure, from: client) }
+                rerecognizeFailure = (record.id, failure.map { HubDictation.cause($0) } ?? "Neo 没有听出文字")
+                return
+            }
+            hub?.noteReached(client)
+            guard var updated = history.records.first(where: { $0.id == record.id })
+                    ?? (current?.id == record.id ? current : nil) else { return }
+            let text = result.text.isEmpty ? result.raw : result.text
+            updated.raw = result.raw
+            updated.finalText = text
+            updated.polished = result.polished ? text : nil
+            updated.mode = result.mode
+            updated.model = nil
+            updated.polishSeconds = result.polished ? Double(result.timings.polishMs) / 1000 : nil
+            updated.hubID = result.id
+            updated.recognizer = result.recognizer.rawValue
+            updated.timings = nil
+            updated.note = result.fallback.map { HubDictation.reason($0) }
+            if current?.id == record.id { replace(with: updated) } else { history.update(updated) }
         }
     }
 
@@ -589,6 +656,16 @@ final class DictationController: ObservableObject {
             let tries = self.hubReachable[id] != false && self.hub?.dictationClient != nil
             let textFirst = tries && self.hub?.recognizesHere == true
             let upload = tries && !textFirst ? Task.detached(priority: .userInitiated) { AudioUpload.encode(samples) } : nil
+            // 录音备份: kept before anything on the way can lose it (the Neo restarting, a worker that hangs), under
+            // the id its history record gets. Only with 保存历史, which is where it is reached.
+            let saved: Task<EncodedAudio, Never>?
+            if self.settings.keepHistory, let backup = self.backup, duration >= 1 {
+                let encoded = upload ?? Task.detached(priority: .utility) { AudioUpload.encode(samples) }
+                saved = encoded
+                Task.detached(priority: .utility) { backup.save(await encoded.value, id: id) }
+            } else {
+                saved = nil
+            }
             let neo = tries ? await self.hubClient(for: id) : nil
             guard self.keeps(id) else { return }
             var take = take
@@ -618,7 +695,7 @@ final class DictationController: ObservableObject {
                     }
                 }
                 if outcome == nil {
-                    let encoding = upload ?? Task.detached(priority: .userInitiated) { AudioUpload.encode(samples) }
+                    let encoding = upload ?? saved ?? Task.detached(priority: .userInitiated) { AudioUpload.encode(samples) }
                     // The request carries this Mac's transcript when it is ready in time; the Neo does not wait for it.
                     // Not one 本机识别 just turned down: the hub would polish it in place of the Neo's once its short
                     // wait for a transcript that can stand in is over, and with 本机识别 the Neo's model is cold (no
@@ -905,7 +982,8 @@ final class DictationController: ObservableObject {
 
         var timings = produced.timings
         if let stopped = take.stoppedAt { timings.waitMs = DictationTimings.milliseconds(ContinuousClock.now - stopped) }
-        let record = DictationRecord(duration: duration, raw: produced.raw, polished: produced.polished, finalText: final,
+        // The take's id, which its saved recording is named by (`RecordingBackup`).
+        let record = DictationRecord(id: take.id, duration: duration, raw: produced.raw, polished: produced.polished, finalText: final,
                                      appName: take.appName, mode: produced.mode, model: produced.model,
                                      polishSeconds: produced.polishSeconds,
                                      note: notes.isEmpty ? nil : notes.joined(separator: "；"),

@@ -96,6 +96,41 @@ HUNG_BASE_SECONDS = 90.0
 HUNG_PER_SECOND = 4.0
 
 
+# The model's memory is wired (MLX keeps buffers up to this limit resident), so while the Neo is idle macOS can
+# neither compress it nor swap it out for another program: a recording never waits for it to come back.
+# Env NEOLESS_ASR_WIRED_MB; 0 leaves it to macOS. Capped below what the GPU may use.
+WIRED_MB_DEFAULT = 3072
+
+
+def wired_bytes(device_info: dict, env: str | None) -> int:
+    try:
+        wanted = int(env) if env not in (None, '') else WIRED_MB_DEFAULT
+    except ValueError:
+        wanted = WIRED_MB_DEFAULT
+    if wanted <= 0:
+        return 0
+    most = int(device_info.get('max_recommended_working_set_size', 0) * 0.75)
+    return min(wanted * 2**20, most) if most > 0 else wanted * 2**20
+
+
+_wired = False
+
+
+def wire_memory(mx) -> None:
+    """Once per process, before the first model is loaded."""
+    global _wired
+    if _wired:
+        return
+    _wired = True
+    try:
+        limit = wired_bytes(mx.metal.device_info(), os.environ.get('NEOLESS_ASR_WIRED_MB'))
+        if limit:
+            mx.set_wired_limit(limit)
+            log(f'wired limit {limit // 2**20} MB')
+    except Exception as exc:  # an older MLX or macOS: recognition still works, only unprotected
+        log(f'wired limit not set: {exc}')
+
+
 def token_cap(seconds: float) -> int:
     """The most tokens one model call over `seconds` of audio may write."""
     return min(ASR_MAX_TOKENS, ASR_TOKENS_BASE + math.ceil(ASR_TOKENS_PER_SECOND * max(0.0, seconds)))
@@ -800,6 +835,7 @@ class QwenEngine:
         import mlx.core as mx
         from mlx_audio.stt.utils import load_model
         self._mx = mx
+        wire_memory(mx)
         self._model = load_model(resolve_model(self.model_id))
         mx.clear_cache()
 

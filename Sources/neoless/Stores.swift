@@ -9,6 +9,9 @@ enum AppFiles {
 
     static var directory: URL { store.directory }
 
+    /// 录音备份: the last `RecordingBackup.keep` recordings, in Recordings/ beside the data files.
+    static let recordings = RecordingBackup(directory: store.directory.appendingPathComponent("Recordings", isDirectory: true))
+
     /// Backups made this launch of files that did not read back (`history.json.corrupt-20261007-204500`),
     /// so the window can say what happened. Nothing shows them yet.
     static var recovered: [String] { store.recovered }
@@ -61,14 +64,17 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
+    /// The record's saved recording goes with it.
     func delete(_ id: UUID) {
         records.removeAll { $0.id == id }
         save()
+        if persists { AppFiles.recordings.remove(id) }
     }
 
     func deleteAll() {
         records = []
         save()
+        if persists { AppFiles.recordings.removeAll() }
     }
 
     private func save() { if persists { AppFiles.write(records, to: file) } }

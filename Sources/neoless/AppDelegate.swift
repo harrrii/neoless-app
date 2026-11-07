@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 用 Neo 处理: the controller sends recordings there, the sync keeps the dictionary and corrections in step.
         controller.hubSync = hubSync
+        controller.backup = AppFiles.recordings
         hubSync.hubID = { [weak self] id in
             guard let self else { return nil }
             if let current = self.controller.current, current.id == id { return current.hubID }

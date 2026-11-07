@@ -1833,6 +1833,14 @@ class QwenEngineTests(QuietLogTestCase):
         engine._model, engine._mx = model, self.Cache()
         return engine
 
+    def test_wired_bytes_defaults_caps_and_turns_off(self):
+        info = {'max_recommended_working_set_size': 4 * 2**30}
+        self.assertEqual(w.wired_bytes(info, None), w.WIRED_MB_DEFAULT * 2**20)
+        self.assertEqual(w.wired_bytes(info, '1024'), 1024 * 2**20)
+        self.assertEqual(w.wired_bytes(info, '99999'), 3 * 2**30)
+        self.assertEqual(w.wired_bytes(info, '0'), 0)
+        self.assertEqual(w.wired_bytes(info, 'lots'), w.WIRED_MB_DEFAULT * 2**20)
+
     def test_token_cap_grows_with_the_audio_up_to_the_most(self):
         self.assertEqual(w.token_cap(0), w.ASR_TOKENS_BASE)
         self.assertEqual(w.token_cap(30), w.ASR_TOKENS_BASE + 30 * w.ASR_TOKENS_PER_SECOND)

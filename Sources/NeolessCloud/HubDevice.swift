@@ -357,7 +357,7 @@ public enum HubDictation {
     }
 
     /// Why the hub did not do it, in a few words: "连不上 Neo", "Neo 上整理超时".
-    static func cause(_ error: Error) -> String {
+    public static func cause(_ error: Error) -> String {
         if let error = error as? HubError {
             if error.needsPairing { return "Neo 配对已失效" }
             if error == .accessDenied { return "Cloudflare 门禁没放行" }
