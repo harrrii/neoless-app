@@ -33,6 +33,14 @@ public struct HubFailure: Error, Equatable, Sendable {
     public static let rateLimited = HubFailure(429, "请求太频繁，稍后再试", code: HubErrorCode.rateLimited, retryable: true)
     public static let asrUnavailable = HubFailure(503, "Neo 的语音识别暂时不可用", code: HubErrorCode.asrUnavailable,
                                                   retryable: true)
+    /// `…/finish` of a recording sent piece by piece, and the hub lacks `missing` (never got them, or forgot them
+    /// in a restart): the device sends them again and finishes again.
+    public static func missingChunks(_ missing: [Int]) -> HubFailure {
+        var failure = HubFailure(409, "Neo 还缺几段录音", code: HubErrorCode.missingChunks, retryable: true)
+        failure.body.missing = missing
+        return failure
+    }
+
     public static let internalError = HubFailure(500, "Neo 出错了，稍后再试", code: HubErrorCode.internalError, retryable: true)
     /// `requireAccess` is on and the request did not come through Cloudflare Access: Access in front of the hub is off
     /// or set up wrong (pairing again would not help).

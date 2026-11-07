@@ -209,7 +209,7 @@ public enum SingleInstance {
     /// Command-line checks that run inside the same bundle (see the app's DebugCommands). A process
     /// started with one of them is never the running app and never makes the real app quit.
     public static let debugFlags: Set<String> = ["--test-polish", "--polish-eval", "--test-callback",
-                                                 "--snapshot", "--snapshot-hud", "--check-keys"]
+                                                 "--snapshot", "--snapshot-hud", "--check-keys", "--test-stream"]
 
     public static func isDebugRun(_ arguments: [String]) -> Bool {
         arguments.contains { debugFlags.contains($0) }

@@ -109,6 +109,19 @@ public enum HubPath {
     public static let history = "/v1/history"
     public static let sync = "/v1/sync"
     public static let warm = "/v1/warm"
+    /// Recordings sent piece by piece while the user speaks (`HubStreamSender`, docs/hub.md "边说边传").
+    public static let streams = "/v1/streams"
+
+    /// `PUT /v1/streams/{recording id}/chunks/{index}`: one piece of the recording.
+    public static func streamChunk(_ recordingID: UUID, index: Int) -> String {
+        "\(streams)/\(recordingID.uuidString)/chunks/\(index)"
+    }
+
+    /// `POST /v1/streams/{recording id}/finish`: all pieces sent; recognised, joined and polished as one dictation.
+    public static func streamFinish(_ recordingID: UUID) -> String { "\(streams)/\(recordingID.uuidString)/finish" }
+
+    /// `DELETE /v1/streams/{recording id}`: the recording was dropped (cancelled, or sent whole after all).
+    public static func stream(_ recordingID: UUID) -> String { "\(streams)/\(recordingID.uuidString)" }
     public static func repolish(_ id: UUID) -> String { "/v1/dictations/\(id.uuidString)/repolish" }
     public static func edit(_ id: UUID) -> String { "/v1/dictations/\(id.uuidString)/edit" }
     public static func historyItem(_ id: UUID) -> String { "/v1/history/\(id.uuidString)" }
@@ -293,9 +306,11 @@ public struct HubErrorBody: Codable, Equatable, Sendable, Error {
     public var code: String
     /// Whether the same request may succeed if sent again later.
     public var retryable: Bool
+    /// `missing_chunks` only: the pieces of a recording sent piece by piece that the hub does not have.
+    public var missing: [Int]?
 
-    public init(error: String, code: String, retryable: Bool = false) {
-        self.error = error; self.code = code; self.retryable = retryable
+    public init(error: String, code: String, retryable: Bool = false, missing: [Int]? = nil) {
+        self.error = error; self.code = code; self.retryable = retryable; self.missing = missing
     }
 }
 
@@ -313,6 +328,9 @@ public enum HubErrorCode {
     public static let asrUnavailable = "asr_unavailable"      // 503: the ASR worker is down (retryable)
     public static let polishFailed = "polish_failed"          // 503: …/repolish got no answer from ChatGPT; text unchanged
     public static let internalError = "internal"              // 500
+    /// 409: `…/finish` of a recording sent piece by piece, and the hub lacks some pieces (`HubErrorBody.missing`):
+    /// the device sends them again and finishes again.
+    public static let missingChunks = "missing_chunks"
     /// 403: the hub takes only requests Cloudflare Access let through (`requireAccess`), and this one did not come
     /// through it. Not the device's fault: re-pairing does not help, Access in front of the hub has to be fixed.
     public static let accessRequired = "access_required"

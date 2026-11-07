@@ -116,6 +116,12 @@ final class StubASR: ASRRecognizing, @unchecked Sendable {
         set { lock.withLock { _health = newValue } }
     }
     var calls: [Call] { lock.withLock { _calls } }
+    private var _queue: [Reply] = []
+    /// Answers for the next recognitions, one each, before `reply` again.
+    var replies: [Reply] {
+        get { lock.withLock { _queue } }
+        set { lock.withLock { _queue = newValue } }
+    }
     /// The model of each warm-up the hub asked for, in order.
     var warms: [HubASRModel] { lock.withLock { _warms } }
     /// Holds every warm-up until opened (a worker that is slow to answer).
@@ -142,6 +148,7 @@ final class StubASR: ASRRecognizing, @unchecked Sendable {
     func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel) async throws -> ASRWorkerResult {
         lock.withLock { _calls.append(Call(wav: wav, hints: hints, seconds: audioSeconds, model: model)) }
         if let gate { await gate.wait() }
+        let reply = lock.withLock { _queue.isEmpty ? _reply : _queue.removeFirst() }
         switch reply {
         case .text(let text): return ASRWorkerResult(raw: text, status: .ok, asrMs: 5, model: "Qwen3-ASR-0.6B-4bit")
         case .silence: return ASRWorkerResult(raw: "", status: .noSpeech, asrMs: 0, model: "Qwen3-ASR-0.6B-4bit")
@@ -251,6 +258,20 @@ final class HubFixture: @unchecked Sendable {
     nonisolated func dictate(_ request: DictationRequest, audio: Data = AudioFixture.m4a,
                              type: HubAudioType = .m4a) async throws -> TestResponse {
         try await send(.post, HubPath.dictations, headers: try dictationHeaders(request, type: type), body: ByteBuffer(bytes: audio))
+    }
+
+    /// `PUT /v1/streams/{id}/chunks/{index}` with `audio`.
+    nonisolated func chunk(_ request: DictationRequest, _ index: Int, audio: Data = AudioFixture.m4a) async throws -> TestResponse {
+        try await send(.put, HubPath.streamChunk(request.clientRecordingID, index: index),
+                       headers: try dictationHeaders(request), body: ByteBuffer(bytes: audio))
+    }
+
+    /// `POST /v1/streams/{id}/finish`.
+    nonisolated func finish(_ request: DictationRequest, chunks: Int) async throws -> TestResponse {
+        var fields = headers([HubServer.requestHeader: try request.headerValue()])
+        fields[.contentType] = "application/json"
+        return try await send(.post, HubPath.streamFinish(request.clientRecordingID), headers: fields,
+                              body: try json(StreamFinishRequest(chunks: chunks)))
     }
 
     nonisolated func post<T: Encodable>(_ uri: String, _ value: T) async throws -> TestResponse {

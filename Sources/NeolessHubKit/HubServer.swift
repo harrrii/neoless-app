@@ -67,6 +67,30 @@ public enum HubServer {
             return try json(await service.dictate(audio: audio, type: type, request: dictation))
         }
 
+        router.put("/v1/streams/:id/chunks/:index") { request, context in
+            let device = try context.device
+            try tooLarge(request, limit: Hub.maxAudioBytes, failure: .audioTooLarge)
+            guard let type = request.headers[.contentType].flatMap(HubAudioType.init(contentType:)) else {
+                throw HubFailure.unsupportedMedia
+            }
+            let dictation = try streamRequest(request, context)
+            guard let index = context.parameters.get("index", as: Int.self) else { throw HubFailure.badRequest("录音分段的编号不对") }
+            let audio = try await collect(request, limit: Hub.maxAudioBytes, failure: .audioTooLarge)
+            return try json(await service.streamChunk(audio: audio, type: type, index: index, request: dictation, device: device))
+        }
+
+        router.post("/v1/streams/:id/finish") { request, context in
+            let dictation = try streamRequest(request, context)
+            let body = try await decode(StreamFinishRequest.self, from: request)
+            return try json(await service.finishStream(request: dictation, chunks: body.chunks))
+        }
+
+        router.delete("/v1/streams/:id") { _, context in
+            let device = try context.device
+            await service.dropStream(try dictationID(context), device: device)
+            return try json(HubOK())
+        }
+
         router.post(RouterPath(HubPath.polish)) { request, _ in
             let body = try await decode(PolishRequest.self, from: request)
             return try json(await service.polish(body))
@@ -195,6 +219,15 @@ public enum HubServer {
         if data.isEmpty, let empty { return empty }
         guard let value = try? HubJSON.decode(T.self, from: data) else { throw HubFailure.badRequest() }
         return value
+    }
+
+    /// The `X-Neoless-Request` of a recording sent piece by piece, for the recording the path names.
+    static func streamRequest(_ request: Request, _ context: HubRequestContext) throws -> DictationRequest {
+        guard let header = request.headers[requestHeader], let dictation = try? DictationRequest(headerValue: header) else {
+            throw HubFailure.badRequest(HubProtocolError.badRequestHeader.errorDescription ?? "听写请求的格式不对")
+        }
+        guard try dictationID(context) == dictation.clientRecordingID else { throw HubFailure.badRequest("录音编号不对") }
+        return dictation
     }
 
     static func dictationID(_ context: HubRequestContext) throws -> UUID {

@@ -118,6 +118,37 @@ import NeolessCore
         }
     }
 
+    @Test func aLargeModelRequestThatRanOutOfTimeAsksAgain() {
+        // The hub is still at it (a long recording on a busy Neo): ask again rather than type this Mac's text.
+        let large = base().asking(for: .large)
+        #expect(HubDictation.waitsLonger(HubError.timeout, request: large))
+        // 自动 and 小模型 had their transcript along: the hub answered with it in time, or something else is wrong.
+        #expect(!HubDictation.waitsLonger(HubError.timeout, request: base()))
+        #expect(!HubDictation.waitsLonger(HubError.timeout, request: base().asking(for: .small)))
+        // A dropped connection while it waits: the job goes on on the Neo.
+        #expect(HubDictation.waitsLonger(HubError.connectionLost, request: large))
+        let others: [Error] = [HubError.unreachable, HubError.accessDenied,
+                               HubError.server(status: 503, body: nil), CancellationError()]
+        for other in others {
+            #expect(!HubDictation.waitsLonger(other, request: large))
+        }
+        // Once waiting, a Neo out of reach for a moment is asked again too; not for the other choices.
+        #expect(HubDictation.asksAgain(HubError.unreachable, request: large))
+        #expect(!HubDictation.asksAgain(HubError.unreachable, request: base()))
+        #expect(!HubDictation.asksAgain(HubError.accessDenied, request: large))
+    }
+
+    @Test func theLargeModelIsWaitedForWellPastWhatTheBusiestNeoTook() {
+        // 2026-11-06: 7.8 minutes of audio took 91 s, 2.3 minutes 55 s. The longest recording (10 minutes) is
+        // still waited for, and the device keeps asking longer than the hub waits.
+        #expect(HubTimeouts.largeModelWait(audioSeconds: 470) >= 4 * 91)
+        #expect(HubTimeouts.largeModelWait(audioSeconds: 138) >= 4 * 55)
+        #expect(HubTimeouts.largeModelWait(audioSeconds: 600) == 900)
+        for seconds: Double in [0, 10, 120, 470, 600] {
+            #expect(HubTimeouts.largeModelPatience(audioSeconds: seconds) > HubTimeouts.largeModelWait(audioSeconds: seconds))
+        }
+    }
+
     @Test func aRequestThatWaitsForTheNeoGetsALongerBudget() {
         let t = HubTimeouts.interactive
         // 20 s of speech, about 80 KB of AAC. Unchanged for the other choices: connect 3 + upload 2.5 + model load 8

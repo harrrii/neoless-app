@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Carbon.HIToolbox
 import NeolessCloud
@@ -12,11 +13,112 @@ import SwiftUI
 ///   neoless --snapshot <dir>           renders every page and HUD state to PNG
 ///                                      (NEOLESS_SNAPSHOT_ONLY=home-ready,overview-* renders only those pages)
 ///   neoless --snapshot-hud <dir>       renders only the HUD capsule states
+///   neoless --test-stream <audio> [--fast] [--whole]
+///                                      边说边传 against a real hub (NEOLESS_PAIR_LINK: a pairing link of a test
+///                                      device): the file is played as if spoken, cut into pieces as it goes, and
+///                                      the time from "stop" to the text printed; --whole sends it whole instead
 ///   neoless --check-keys               the page keys (⌘1 … ⌘4, 1 … 4) against the real menu and pages, off screen
 @MainActor
 enum DebugCommands {
     static func wants(_ args: [String]) -> Bool {
         SingleInstance.isDebugRun(args)
+    }
+
+    /// `--test-stream`: one recording through 边说边传 (or whole), as the app sends it with 大模型.
+    static func testStream(path: String, realTime: Bool, whole: Bool) async {
+        setvbuf(stdout, nil, _IOLBF, 0)
+        guard let link = ProcessInfo.processInfo.environment["NEOLESS_PAIR_LINK"], let pairing = try? HubPairing(link: link) else {
+            print("需要 NEOLESS_PAIR_LINK（一台测试设备的配对链接）")
+            return
+        }
+        guard let samples = readSamples(URL(fileURLWithPath: path)) else {
+            print("读不了这个音频文件")
+            return
+        }
+        let rate = AudioRecorder.sampleRate
+        let duration = Double(samples.count) / rate
+        let client = HubClient(server: pairing.server, token: pairing.token, access: pairing.access)
+        let request = DictationRequest(mode: .natural, autoStructured: false, appName: "测试", locale: "zh-CN",
+                                       durationSeconds: duration, clientRecordingID: UUID(), client: .mac,
+                                       clientVersion: AppVersion.current).asking(for: .large)
+        print(String(format: "录音 %.1f 秒，%@", duration, whole ? "整段上传" : "边说边传"))
+        func ask(_ call: @escaping @Sendable () async throws -> DictationResult) async throws -> DictationResult {
+            let began = Date()
+            while true {
+                do { return try await call() } catch let error where HubDictation.asksAgain(error, request: request)
+                    && Date().timeIntervalSince(began) < HubTimeouts.largeModelPatience(audioSeconds: duration) {
+                    print("  再问一次：\(error)")
+                }
+            }
+        }
+        do {
+            let result: DictationResult
+            let stopped: Date
+            if whole {
+                if realTime { try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000)) }
+                stopped = Date()
+                let audio = AudioUpload.encode(samples)
+                result = try await ask { try await client.dictate(audio, request: request) }
+            } else {
+                let sender = HubStreamSender(send: { audio, index in
+                    let answer = try await client.streamChunk(audio, index: index, request: request)
+                    print(String(format: "  第 %d 段 %.1f 秒已送到", index, answer.seconds))
+                }, drop: { await client.dropStream(request.clientRecordingID) })
+                var cut = 0, count = 0
+                var adds: [Task<Void, Never>] = []
+                var heard = 0.0
+                while heard < duration {
+                    heard = min(duration, heard + 1)
+                    if realTime { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+                    let available = Int(heard * rate)
+                    guard available - cut > Int(StreamCut.minSeconds * rate),
+                          let point = StreamCut.point(in: samples[cut..<available], sampleRate: rate) else { continue }
+                    let piece = Array(samples[cut..<(cut + point)]), index = count
+                    print(String(format: "  %.0f 秒：切出第 %d 段（%.1f 秒）", heard, index, Double(point) / rate))
+                    cut += point
+                    count += 1
+                    adds.append(Task.detached { await sender.add(piece, index: index) })
+                }
+                stopped = Date()
+                for add in adds { await add.value }
+                if cut < samples.count {
+                    await sender.add(Array(samples[cut...]), index: count)
+                    count += 1
+                }
+                let chunks = count
+                result = try await ask {
+                    try await sender.finish(chunks: chunks) { try await client.finishStream(request: request, chunks: $0) }
+                }
+            }
+            print(String(format: "停下到出字：%.1f 秒（Neo 收尾识别 %.1f 秒，整理 %.1f 秒）", Date().timeIntervalSince(stopped),
+                         Double(result.timings.asrMs) / 1000, Double(result.timings.polishMs) / 1000))
+            print("原文：" + result.raw)
+            print("整理：" + result.text)
+        } catch {
+            print("ERROR", error)
+        }
+    }
+
+    /// An audio file as 16 kHz mono samples.
+    static func readSamples(_ url: URL) -> [Float]? {
+        guard let file = try? AVAudioFile(forReading: url),
+              let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: AudioRecorder.sampleRate, channels: 1,
+                                         interleaved: false),
+              let converter = AVAudioConverter(from: file.processingFormat, to: target),
+              let input = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: input)) != nil else { return nil }
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * AudioRecorder.sampleRate / file.processingFormat.sampleRate) + 1024
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        var given = false
+        var error: NSError?
+        converter.convert(to: output, error: &error) { _, status in
+            if given { status.pointee = .endOfStream; return nil }
+            given = true
+            status.pointee = .haveData
+            return input
+        }
+        guard error == nil, let data = output.floatChannelData else { return nil }
+        return Array(UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
     }
 
     static func run(_ args: [String]) async {
@@ -34,6 +136,8 @@ enum DebugCommands {
             }
             // A polish timeout stops waiting for a token refresh but not the refresh: let it save before exit(0).
             await account.waitForRefresh()
+        } else if let i = args.firstIndex(of: "--test-stream"), i + 1 < args.count {
+            await testStream(path: args[i + 1], realTime: !args.contains("--fast"), whole: args.contains("--whole"))
         } else if args.contains("--polish-eval") {
             await polishEval(args)
         } else if args.contains("--test-callback") {

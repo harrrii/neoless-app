@@ -248,6 +248,10 @@ final class AudioRecorder: @unchecked Sendable {
 
     var duration: TimeInterval { lock.withLock { Double(samples.count) / Self.sampleRate } }
     func recordedSamples() -> [Float] { lock.withLock { samples } }
+    /// The samples from `start` on, while recording goes on (边说边传 cuts its pieces from them).
+    func samples(from start: Int) -> [Float] {
+        lock.withLock { start < samples.count ? Array(samples[max(0, start)...]) : [] }
+    }
     /// This recording has produced at least one buffer that is not digital silence.
     var heardSignal: Bool { lock.withLock { signalled } }
 

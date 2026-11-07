@@ -96,6 +96,24 @@ final class DictationController: ObservableObject {
         var stoppedAt: ContinuousClock.Instant?
     }
 
+    /// A take's recording as it goes to the Neo piece by piece while the user speaks (`startStream`).
+    private struct Streaming {
+        let sender: HubStreamSender
+        /// Samples already cut into pieces: the next piece starts here.
+        var cut = 0
+        /// Pieces cut so far.
+        var count = 0
+        /// Each piece's encoding and sending, waited for before the recording is finished.
+        var adds: [Task<Void, Never>] = []
+        var ticker: Task<Void, Never>?
+    }
+
+    /// The pieces of a recording, all sent, for `viaHub` to finish as one dictation.
+    private struct StreamedPieces: Sendable {
+        let sender: HubStreamSender
+        let chunks: Int
+    }
+
     private var flow = CaptureFlow()
     private var session = UUID()
     private var take: Take?
@@ -130,6 +148,9 @@ final class DictationController: ObservableObject {
     private var hubReachable: [UUID: Bool] = [:]
     /// Why that ping failed, when it says more than "out of reach" (Cloudflare Access stopped it, 双重锁).
     private var hubPingFailures: [UUID: HubError] = [:]
+    /// 边说边传 (识别模型 › 大模型): the pieces of a take already cut and on their way to the Neo while the user
+    /// speaks, by take id (`startStream`).
+    private var streaming: [UUID: Streaming] = [:]
     /// When the Neo is next asked to get its speech model ready (`warmHub`).
     private var warmGate = HubWarmGate()
     /// The last text an app did not take (`InsertResult.copiedWaiting`), sent again once its input box takes
@@ -500,6 +521,10 @@ final class DictationController: ObservableObject {
     /// Closes the microphone and drops the capture (discard, cancel, failure).
     private func closeCapture() {
         cancelTimers()
+        if let stream = streaming.removeValue(forKey: session) {
+            stream.ticker?.cancel()
+            Task { await stream.sender.cancel() }
+        }
         hubPings[session] = nil
         hubReachable[session] = nil
         hubPingFailures[session] = nil
@@ -537,6 +562,9 @@ final class DictationController: ObservableObject {
         self.take = take
         let id = session
         let speech = self.speech
+        // No more pieces while the tail is recorded: what is left after the last cut goes as the last piece.
+        let stream = streaming.removeValue(forKey: id)
+        stream?.ticker?.cancel()
         self.recorder = nil
         self.speech = nil
         set(.transcribing)
@@ -599,7 +627,19 @@ final class DictationController: ObservableObject {
                     guard self.keeps(id) else { return }
                     // Silence that nothing here made words of is not worth sending.
                     if hasSpeech || (early ?? turnedDown)?.isEmpty == false {
-                        outcome = await self.viaHub(neo, audio: await encoding.value, early: early, local: finishing,
+                        // 边说边传: the pieces sent while the user spoke, and what is left after the last cut.
+                        var pieces: StreamedPieces?
+                        if let stream, stream.count > 0, !textFirst, self.hub?.askedModel == .large {
+                            for add in stream.adds { await add.value }
+                            var chunks = stream.count
+                            if samples.count > stream.cut {
+                                await stream.sender.add(Array(samples[stream.cut...]), index: chunks)
+                                chunks += 1
+                            }
+                            pieces = StreamedPieces(sender: stream.sender, chunks: chunks)
+                        }
+                        guard self.keeps(id) else { return }
+                        outcome = await self.viaHub(neo, audio: encoding, stream: pieces, early: early, local: finishing,
                                                     whole: whole, duration: duration, take: take)
                     }
                 }
@@ -614,6 +654,8 @@ final class DictationController: ObservableObject {
             } else if let note = self.hubSkipNote(id) {
                 take.notes.append(note)
             }
+            // Not finished as pieces (the Neo out of reach, or this Mac does the work): the Neo forgets them.
+            if let stream { Task { await stream.sender.cancel() } }
             var raw = await finishing.value
             guard self.keeps(id) else { return }
             let diedEarly = speech?.diedEarly == true
@@ -972,6 +1014,54 @@ final class DictationController: ObservableObject {
             return reached
         }
         warmHub(client)
+        if hub?.askedModel == .large, hub?.recognizesHere != true { startStream(client) }
+    }
+
+    /// The dictation as the Neo is asked for it: the mode and app from when recording started, 识别模型, 整理模型
+    /// and 快速模式.
+    private func dictationRequest(_ take: Take, transcript: String?, duration: TimeInterval) -> DictationRequest {
+        DictationRequest(mode: take.chosenMode, autoStructured: take.autoStructured, appName: take.appName,
+                         bundleID: take.bundleID, locale: settings.localeID, localTranscript: transcript,
+                         durationSeconds: duration, clientRecordingID: take.id, client: .mac,
+                         clientVersion: AppVersion.current, polishModel: settings.model, fastTier: settings.fastTier)
+            .asking(for: hub?.askedModel)
+    }
+
+    /// 边说边传 (识别模型 › 大模型): while the user speaks, the recording is cut in pauses every 20–45 s
+    /// (`StreamCut`) and each piece goes to the Neo, which recognises it at once. Once the user stops, only the last
+    /// piece is left for it (`viaHub`). A short recording is never cut and goes whole, as before.
+    private func startStream(_ client: HubClient) {
+        let id = session
+        guard streaming[id] == nil, let take else { return }
+        let request = dictationRequest(take, transcript: nil, duration: 0)
+        let sender = HubStreamSender(send: { audio, index in
+            _ = try await client.streamChunk(audio, index: index, request: request)
+        }, drop: { await client.dropStream(id) })
+        var stream = Streaming(sender: sender)
+        stream.ticker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, self.session == id, let recorder = self.recorder else { return }
+                // The Neo did not answer the ping, or does not take pieces: the recording goes whole, if at all.
+                if self.hubReachable[id] == false { return }
+                if await sender.isUnsupported { return }
+                self.cutPiece(id, from: recorder)
+            }
+        }
+        streaming[id] = stream
+    }
+
+    /// Cuts the next piece off the recording when it is long enough and has a pause, and sends it.
+    private func cutPiece(_ id: UUID, from recorder: AudioRecorder) {
+        guard var stream = streaming[id], stream.count + 1 < Hub.maxStreamChunks,
+              recorder.duration - Double(stream.cut) / AudioRecorder.sampleRate > StreamCut.minSeconds else { return }
+        let pending = recorder.samples(from: stream.cut)
+        guard let point = StreamCut.point(in: pending, sampleRate: AudioRecorder.sampleRate) else { return }
+        let piece = Array(pending[..<point]), index = stream.count, sender = stream.sender
+        stream.cut += point
+        stream.count += 1
+        stream.adds.append(Task.detached(priority: .utility) { await sender.add(piece, index: index) })
+        streaming[id] = stream
     }
 
     /// 用 Neo 处理: asks the Neo, alongside the ping, to get the speech model this dictation will use ready
@@ -1001,7 +1091,8 @@ final class DictationController: ObservableObject {
     /// recording, `HubTimeouts.interactive`): then this Mac carries on with its own transcript and whatever the
     /// Neo sends later is ignored. `early`: this Mac's transcript if it was ready when the upload started;
     /// `whole`: whether this Mac would use a transcript as it is (no second look at the recording first).
-    private func viaHub(_ client: HubClient, audio: EncodedAudio, early: String?, local: LocalTranscript,
+    private func viaHub(_ client: HubClient, audio: Task<EncodedAudio, Never>, stream: StreamedPieces? = nil,
+                        early: String?, local: LocalTranscript,
                         whole: (String) -> Bool, duration: TimeInterval, take: Take) async -> HubOutcome {
         let id = take.id
         if take.mode.polishes, session == id { set(.polishing) }
@@ -1009,17 +1100,8 @@ final class DictationController: ObservableObject {
         // 识别模型: the choice, on a Neo that has both models. Asking for the large one means waiting for it: this
         // Mac's transcript stays here and the call gets a longer budget (`DictationRequest.asking`). 整理模型 and
         // 快速模式 go along, so the Neo polishes as this Mac would (and so does a `/v1/polish` that follows).
-        let request = DictationRequest(mode: take.chosenMode, autoStructured: take.autoStructured, appName: take.appName,
-                                       bundleID: take.bundleID, locale: settings.localeID,
-                                       localTranscript: handed, durationSeconds: duration,
-                                       clientRecordingID: id, client: .mac, clientVersion: AppVersion.current,
-                                       polishModel: settings.model, fastTier: settings.fastTier)
-            .asking(for: hub?.askedModel)
-        // A guard around the client's own budget, should anything in it hang: the budget, and the time a resend
-        // after a dropped connection is given on top (`HubTimeouts.resend`).
+        let request = dictationRequest(take, transcript: handed, duration: duration)
         let timeouts = client.timeouts
-        let budget = timeouts.dictation(durationSeconds: duration, audioBytes: audio.data.count, patient: request.waitsForNeo)
-            + timeouts.resend(bytes: audio.data.count) + 5
         let result: DictationResult
         // How long the call whose answer is used took, sending included; and the one before it, when that answer was
         // not used (`DictationTimings.neoWaitMs`).
@@ -1027,11 +1109,53 @@ final class DictationController: ObservableObject {
         var unusedMs: Int?
         let began = ContinuousClock.now
         func since(_ start: ContinuousClock.Instant) -> Int { DictationTimings.milliseconds(ContinuousClock.now - start) }
+        /// The recording sent whole. A guard around the client's own budget, should anything in it hang: the budget,
+        /// and the time a resend after a dropped connection is given on top (`HubTimeouts.resend`).
+        @Sendable func dictateWhole() async throws -> DictationResult {
+            let audio = await audio.value
+            let budget = timeouts.dictation(durationSeconds: duration, audioBytes: audio.data.count, patient: request.waitsForNeo)
+                + timeouts.resend(bytes: audio.data.count) + 5
+            return try await withTimeout(seconds: budget) { try await client.dictate(audio, request: request) }
+        }
+        /// 边说边传: the pieces sent while the user spoke are finished as one dictation. A hub that does not take
+        /// pieces (one from before them), or kept losing them, gets the recording whole.
+        func ask() async throws -> DictationResult {
+            if let stream {
+                do {
+                    return try await withTimeout(seconds: 2 * timeouts.cap + 5) {
+                        try await stream.sender.finish(chunks: stream.chunks) { chunks in
+                            try await client.finishStream(request: request, chunks: chunks)
+                        }
+                    }
+                } catch is HubStreamSender.Failure {}
+            }
+            return try await dictateWhole()
+        }
+        /// 大模型: the text must be the Neo's, however long it takes (a long recording on a busy Neo outlasts one
+        /// call, which Cloudflare ends at 100 s). Asked again under the same recording id, the Neo answers with the
+        /// job it is running when it is done (`HubDictation.waitsLonger`).
+        func askNeo() async throws -> DictationResult {
+            do {
+                return try await ask()
+            } catch let error where HubDictation.waitsLonger(error, request: request) {
+                let patience = HubTimeouts.largeModelPatience(audioSeconds: duration)
+                var last: Error = error
+                while Double(since(began)) / 1000 < patience {
+                    do {
+                        return try await ask()
+                    } catch let again where HubDictation.asksAgain(again, request: request) {
+                        last = again
+                        if (again as? HubError) != .timeout { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                    }
+                }
+                throw last
+            }
+        }
         do {
             var answer: DictationResult
             var sent = began
             do {
-                answer = try await withTimeout(seconds: budget) { try await client.dictate(audio, request: request) }
+                answer = try await askNeo()
             } catch let error where HubDictation.transcriptFollows(error, request: request) {
                 // The Neo could not recognise at all, and this Mac's transcript was held back for the large model:
                 // it follows now and the Neo polishes it, as it would have had it come along.

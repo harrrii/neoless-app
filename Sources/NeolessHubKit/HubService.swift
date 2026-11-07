@@ -8,7 +8,7 @@ import NeolessCore
 public final class HubService {
     /// Told to devices (`GET /v1/health`). Raised whenever the hub's learning rules change: a device then
     /// offers it once more the corrections it turned down before (`HubLearning.resend`).
-    public nonisolated static let version = "1.4.0"
+    public nonisolated static let version = "1.5.0"
 
     public let folder: HubDataFolder
     public let devices: DeviceRegistry
@@ -31,6 +31,8 @@ public final class HubService {
     private var recent: [UUID: DictationResult] = [:]
     private var recentOrder: [UUID] = []
     static let recentLimit = 256
+    /// Recordings sent piece by piece (`POST /v1/streams/…`), by `clientRecordingID`, until finished or dropped.
+    private var streams: [UUID: Stream] = [:]
     /// Repolishes being worked on, by dictation id and mode.
     private var repolishing: [String: Task<DictationResult, Error>] = [:]
     /// How many times each dictation's text was edited (`…/edit`), by its id: a repolish that sees a new edit
@@ -93,6 +95,7 @@ public final class HubService {
         /// The kind of a route (`HubPath`, or the router's pattern such as "/v1/dictations/:id/repolish").
         public static func of(route: String) -> RequestKind {
             if route == HubPath.warm { return .warm }
+            if route.hasPrefix(HubPath.streams) { return .dictation }
             return route == HubPath.dictations || route == HubPath.polish || route.hasSuffix("/repolish") ? .dictation : .other
         }
     }
@@ -222,14 +225,183 @@ public final class HubService {
         }
     }
 
+    // MARK: - Recordings sent piece by piece (边说边传)
+
+    /// A recording whose pieces arrive while the user speaks. Each piece is recognised as it arrives, one after the
+    /// other in the order they came; its WAV is kept until its text is in, so a failed recognition is tried again
+    /// at `…/finish`.
+    struct Stream {
+        struct Piece {
+            var seconds: Double
+            var decodeMs: Int
+            var wav: Data?
+            var job: Task<String, Error>
+        }
+        var device: String
+        var model: HubASRModel
+        var pieces: [Int: Piece] = [:]
+        var touched: Date
+        /// The last job started: the next waits for it, so the worker gets one piece at a time.
+        var last: Task<String, Error>?
+        var seconds: Double { pieces.values.reduce(0) { $0 + $1.seconds } }
+    }
+
+    /// How long a recording sent piece by piece is kept without a new piece or `…/finish`.
+    static let streamIdle: TimeInterval = 30 * 60
+    /// The most recordings kept at once (the oldest is dropped).
+    static let maxStreams = 8
+
+    /// `PUT /v1/streams/{id}/chunks/{index}`. Decodes the piece and answers; recognition goes on in the background.
+    /// The same piece again (a device that did not get the answer) is not decoded or recognised twice.
+    public func streamChunk(audio: Data, type: HubAudioType, index: Int, request: DictationRequest,
+                            device: HubDevice) async throws -> StreamChunkAnswer {
+        try Self.checkLengths(texts: [], names: [request.appName, request.bundleID, request.clientVersion])
+        guard (0..<Hub.maxStreamChunks).contains(index) else { throw HubFailure.badRequest("录音分段的编号不对") }
+        let id = request.clientRecordingID
+        dropIdleStreams()
+        if let piece = streams[id]?.pieces[index] { return StreamChunkAnswer(index: index, seconds: piece.seconds) }
+        // Finished already (a device sending a piece late): nothing is left to do with it.
+        if finished(id) != nil || running[id] != nil { return StreamChunkAnswer(index: index, seconds: 0) }
+        let start = ContinuousClock.now
+        let prepared: AudioPrep.Prepared
+        do {
+            prepared = try await AudioPrep.workerWAV(from: audio, type: type)
+        } catch AudioPrep.Failure.tooLong {
+            throw HubFailure.audioTooLong
+        } catch {
+            throw HubFailure.decodeFailed
+        }
+        let decodeMs = Self.ms(since: start)
+        // Decoding took a while: the piece may have come twice meanwhile, or the recording been finished.
+        if let piece = streams[id]?.pieces[index] { return StreamChunkAnswer(index: index, seconds: piece.seconds) }
+        if finished(id) != nil || running[id] != nil { return StreamChunkAnswer(index: index, seconds: 0) }
+        var stream = streams[id] ?? Stream(device: device.tokenHash, model: request.asrModel ?? .auto, touched: now())
+        guard stream.device == device.tokenHash else { throw HubFailure.badRequest("录音编号不对") }
+        guard stream.seconds + prepared.seconds <= AudioPrep.maxSeconds + 1 else { throw HubFailure.audioTooLong }
+        let job = recognizePiece(prepared.wav, seconds: prepared.seconds, model: stream.model, after: stream.last,
+                                 stream: id, index: index)
+        stream.pieces[index] = Stream.Piece(seconds: prepared.seconds, decodeMs: decodeMs, wav: prepared.wav, job: job)
+        stream.last = job
+        stream.touched = now()
+        if streams[id] == nil, streams.count >= Self.maxStreams,
+           let oldest = streams.min(by: { $0.value.touched < $1.value.touched })?.key {
+            dropStream(oldest)
+        }
+        streams[id] = stream
+        return StreamChunkAnswer(index: index, seconds: prepared.seconds)
+    }
+
+    /// Recognises one piece after `previous` is done (the worker takes one recording at a time) and lets go of its
+    /// WAV once its text is in. Silence is an empty text, not a failure.
+    private func recognizePiece(_ wav: Data, seconds: Double, model: HubASRModel, after previous: Task<String, Error>?,
+                                stream id: UUID, index: Int) -> Task<String, Error> {
+        let asr = self.asr
+        return Task { @MainActor [weak self] in
+            _ = try? await previous?.value
+            guard seconds > 0, let self else { return "" }
+            let heard = try await asr.recognize(wav: wav, hints: self.words.recognizerHints, audioSeconds: seconds, model: model)
+            self.streams[id]?.pieces[index]?.wav = nil
+            return heard.raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// `POST /v1/streams/{id}/finish`: waits for the pieces' recognition (a piece whose recognition failed is tried
+    /// once more), joins their text in order and finishes it as a dictation (`finish`), once per recording like
+    /// `dictate`. 409 `missing_chunks` while pieces are missing; the device sends them and asks again.
+    public func finishStream(request: DictationRequest, chunks: Int) async throws -> DictationResult {
+        try Self.checkLengths(texts: [request.localTranscript],
+                              names: [request.appName, request.bundleID, request.clientVersion])
+        guard (1...Hub.maxStreamChunks).contains(chunks) else { throw HubFailure.badRequest("录音分段的数目不对") }
+        return try await once(request.clientRecordingID, polishing: false) { [unowned self] in
+            try await self.runStream(request: request, chunks: chunks)
+        }
+    }
+
+    private func runStream(request: DictationRequest, chunks: Int) async throws -> DictationResult {
+        let id = request.clientRecordingID
+        let start = ContinuousClock.now
+        let missing = (0..<chunks).filter { streams[id]?.pieces[$0] == nil }
+        guard missing.isEmpty, let stream = streams[id] else {
+            throw HubFailure.missingChunks(missing.isEmpty ? Array(0..<chunks) : missing)
+        }
+        streams[id]?.touched = now()
+        var texts: [String] = []
+        var problem: HubFailure?
+        for index in 0..<chunks {
+            guard let piece = stream.pieces[index] else { continue }
+            do {
+                texts.append(try await piece.job.value)
+            } catch {
+                // Once more, now that the worker may be free again.
+                do {
+                    guard let wav = streams[id]?.pieces[index]?.wav else { throw error }
+                    let heard = try await asr.recognize(wav: wav, hints: words.recognizerHints,
+                                                        audioSeconds: piece.seconds, model: stream.model)
+                    texts.append(heard.raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                } catch {
+                    HubLog.write("asr: \(Self.describe(error))（分段 \(index)）")
+                    problem = Self.failure(forASR: error)
+                    break
+                }
+            }
+        }
+        var timings = HubTimings()
+        timings.decodeMs = stream.pieces.values.reduce(0) { $0 + $1.decodeMs }
+        // What was left for the Neo to recognise once the user stopped: the wait the device saw.
+        timings.asrMs = Self.ms(since: start)
+        var raw = problem == nil ? StreamCut.join(texts) : ""
+        var recognizer = HubRecognizer.qwen3ASR
+        let local = request.localTranscript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if raw.isEmpty, !local.isEmpty {
+            raw = local
+            recognizer = .local
+        } else if let problem {
+            throw problem
+        }
+        dropStream(id)
+        HubLog.write("stream: \(chunks) 段，\(Int(stream.seconds.rounded())) 秒，收尾识别 \(timings.asrMs) ms")
+        return await finish(raw: raw, recognizer: recognizer, mode: request.effectiveMode, clientRecordingID: id,
+                            about: Origin(appName: request.appName, bundleID: request.bundleID, client: request.client,
+                                          clientVersion: request.clientVersion, durationSeconds: request.durationSeconds),
+                            options: config.polishOptions(model: request.polishModel, fastTier: request.fastTier),
+                            timings: timings, start: start)
+    }
+
+    /// `DELETE /v1/streams/{id}`: forgets a recording's pieces (the device sent it whole after all, or cancelled).
+    public func dropStream(_ id: UUID, device: HubDevice) {
+        guard let stream = streams[id], stream.device == device.tokenHash else { return }
+        dropStream(id)
+    }
+
+    private func dropStream(_ id: UUID) {
+        guard let stream = streams.removeValue(forKey: id) else { return }
+        // A finish under way keeps its own copy of the jobs; any other recognition still to run is not needed.
+        if running[id] == nil { stream.pieces.values.forEach { $0.job.cancel() } }
+    }
+
+    private func dropIdleStreams() {
+        let cutoff = now().addingTimeInterval(-Self.streamIdle)
+        for (id, stream) in streams where stream.touched < cutoff && running[id] == nil { dropStream(id) }
+    }
+
+    /// Recordings sent piece by piece and not finished yet (for tests).
+    var openStreams: Int { streams.count }
+
     /// Runs `work` once per recording: a finished result is returned as it is, a running job is waited for.
-    /// A result with an empty `raw` does not hold the id: the device's own transcript (`/v1/polish`) follows.
+    /// A result with an empty `raw` does not hold the id: the device's own transcript (`/v1/polish`) follows. So does
+    /// a dictation that failed: a polish that waited for it (a device that ran out of time for the large model,
+    /// `HubDictation.waitsLonger`) polishes the device's transcript instead.
     private func once(_ id: UUID, polishing: Bool,
                       _ work: @escaping @MainActor () async throws -> DictationResult) async throws -> DictationResult {
         while true {
             if let done = finished(id) { return done }
             guard let job = running[id] else { break }
-            let result = try await join(job)
+            let result: DictationResult
+            do {
+                result = try await join(job)
+            } catch where polishing && !(error is CancellationError) {
+                continue
+            }
             if !polishing || !result.raw.isEmpty { return result }
         }
         let job = Task { @MainActor [weak self] () throws -> DictationResult in

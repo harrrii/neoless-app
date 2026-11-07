@@ -284,6 +284,23 @@ public enum HubDictation {
         return body.code == HubErrorCode.asrUnavailable
     }
 
+    /// The dictation failed with `error`: whether to ask the Neo again, under the same recording id, instead of
+    /// giving up on it. Only for a request that waits for the large model (`DictationRequest.waitsForNeo`) whose call
+    /// ran out of time: a long recording on a busy Neo takes the large model longer than one call may last (below
+    /// Cloudflare's 100 s, `HubTimeouts.interactiveCap`), while the hub carries on with it. Asked again, the hub
+    /// answers with that job's result once it is done (it runs one job per recording id, docs/hub.md).
+    /// A dropped connection, or a moment the tunnel could not be reached, while it waits counts the same: the job
+    /// goes on on the Neo. The device keeps asking for `HubTimeouts.largeModelPatience`.
+    public static func waitsLonger(_ error: Error, request: DictationRequest) -> Bool {
+        guard request.waitsForNeo, let error = error as? HubError else { return false }
+        return error == .timeout || error == .connectionLost
+    }
+
+    /// Asked again after the first call (`waitsLonger`): a Neo out of reach for a moment is asked once more too.
+    public static func asksAgain(_ error: Error, request: DictationRequest) -> Bool {
+        waitsLonger(error, request: request) || (request.waitsForNeo && (error as? HubError) == .unreachable)
+    }
+
     public enum Next: Equatable, Sendable {
         /// Type the hub's text.
         case use(DictationResult)

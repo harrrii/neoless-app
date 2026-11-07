@@ -126,6 +126,20 @@ public struct HubTimeouts: Equatable, Sendable {
     /// The standard `cap`. Through the tunnel no single answer can take longer than Cloudflare waits
     /// (`HubClient.cloudflareWait`, 100 s); a longer job is asked about again (`HubClient` explains).
     public static let longest: TimeInterval = 300
+    /// How long the hub waits for its worker when the device asked for the large model by name (识别模型 › 大模型:
+    /// "the text must be the Neo's, I can wait"): a minute plus 1.5 s per second of audio, at most 15 minutes. On a
+    /// swamped Neo (2026-11-06, swap full) the large model took 0.2–0.6 s per second of audio, 91 s for 7.8 minutes.
+    public static func largeModelWait(audioSeconds: Double) -> TimeInterval {
+        let seconds = audioSeconds.isFinite ? max(0, audioSeconds) : 0
+        return min(900, 60 + 1.5 * seconds)
+    }
+
+    /// How long a device keeps asking the hub for a large-model dictation (`HubDictation.waitsLonger`): the hub's
+    /// own wait for its worker, then a long polish and the trip back.
+    public static func largeModelPatience(audioSeconds: Double) -> TimeInterval {
+        largeModelWait(audioSeconds: audioSeconds) + PolishTimeout.cap + 30
+    }
+
     /// Slowest upload speed planned for, in bytes per second (about 256 kbit/s).
     public static let uploadBytesPerSecond: Double = 32_000
     /// Recognition by a request that does not ask for the large model by name (`patient`): loading the speech model
@@ -208,6 +222,12 @@ public struct HubTimeouts: Equatable, Sendable {
     /// (`…/repolish`), the longest polish.
     public func polish(characters: Int?) -> TimeInterval {
         min(cap, connect + hubPolish(characters: characters) + margin)
+    }
+
+    /// One piece of a recording sent while the user speaks (`HubClient.streamChunk`): sending it, and the hub's
+    /// decoding before it answers.
+    public func chunk(bytes: Int) -> TimeInterval {
+        min(cap, connect + Double(max(0, bytes)) / Self.uploadBytesPerSecond + 10 + margin)
     }
 
     /// The least a second try gets after a dropped connection: sending `bytes` again and collecting the answer.
@@ -346,14 +366,55 @@ public final class HubClient: Sendable {
                                    repeatable: true, slow: true))
     }
 
+    /// `PUT /v1/streams/{id}/chunks/{index}`: one piece of a recording sent while the user speaks (边说边传,
+    /// `HubStreamSender`). The hub answers once it has decoded the piece; recognition goes on in the background.
+    /// `request` is the dictation's, without this device's transcript (only the large model streams).
+    public func streamChunk(_ audio: EncodedAudio, index: Int, request: DictationRequest) async throws -> StreamChunkAnswer {
+        guard audio.data.count <= Hub.maxAudioBytes else { throw HubError.audioTooLarge }
+        let header: String
+        do {
+            header = try request.headerValue()
+        } catch {
+            throw HubError.invalidRequest((error as? LocalizedError)?.errorDescription ?? "听写请求的格式不对")
+        }
+        return try await send(Call(method: "PUT", path: HubPath.streamChunk(request.clientRecordingID, index: index),
+                                   body: audio.data, contentType: audio.type.rawValue, headers: [HubHeader.request: header],
+                                   budget: timeouts.chunk(bytes: audio.data.count), repeatable: true, slow: true))
+    }
+
+    /// `POST /v1/streams/{id}/finish`: the recording's `chunks` pieces are all sent; the hub waits for their
+    /// recognition, joins and polishes the text, and answers as `POST /v1/dictations` would. Asked again under the
+    /// same recording id, it answers with the same job's result (`HubDictation.waitsLonger`).
+    public func finishStream(request: DictationRequest, chunks: Int, budget: TimeInterval? = nil) async throws -> DictationResult {
+        let header: String
+        do {
+            header = try request.headerValue()
+        } catch {
+            throw HubError.invalidRequest((error as? LocalizedError)?.errorDescription ?? "听写请求的格式不对")
+        }
+        var call = json("POST", HubPath.streamFinish(request.clientRecordingID), StreamFinishRequest(chunks: chunks),
+                        budget: budget ?? timeouts.cap, repeatable: true, slow: true)
+        call.headers[HubHeader.request] = header
+        return try await send(call)
+    }
+
+    /// `DELETE /v1/streams/{id}`: the hub forgets the pieces of a recording that will not be finished as pieces.
+    /// Best effort: nothing is said when it does not get through (the hub forgets them after half an hour anyway).
+    public func dropStream(_ recordingID: UUID) async {
+        let _: HubOK? = try? await send(Call(method: "DELETE", path: HubPath.stream(recordingID), budget: timeouts.quick,
+                                             repeatable: true))
+    }
+
     /// `POST /v1/dictations` with audio from `AudioUpload.encode`.
     public func dictate(_ audio: EncodedAudio, request: DictationRequest) async throws -> DictationResult {
         try await dictate(audio: audio.data, type: audio.type, request: request)
     }
 
-    /// `POST /v1/polish`: text the device recognised itself.
-    public func polish(_ request: PolishRequest) async throws -> DictationResult {
-        try await send(json("POST", HubPath.polish, request, budget: timeouts.polish(characters: request.text.count),
+    /// `POST /v1/polish`: text the device recognised itself. `budget`: longer than a polish's own, for one that
+    /// waits for the dictation the hub is still working on under the same recording id (`HubDictation.waitsLonger`).
+    public func polish(_ request: PolishRequest, budget: TimeInterval? = nil) async throws -> DictationResult {
+        try await send(json("POST", HubPath.polish, request,
+                            budget: budget ?? timeouts.polish(characters: request.text.count),
                             repeatable: true, slow: true))
     }
 

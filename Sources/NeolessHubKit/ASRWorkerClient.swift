@@ -96,13 +96,15 @@ public struct ASRWorkerClient: ASRRecognizing {
         configuration.urlCache = nil
         configuration.connectionProxyDictionary = [:]   // 127.0.0.1 only, never through a proxy
         // Backstops only: every call has its own deadline (`deadline`), shorter than these.
-        configuration.timeoutIntervalForRequest = 300
-        configuration.timeoutIntervalForResource = 600
+        configuration.timeoutIntervalForRequest = 1200
+        configuration.timeoutIntervalForResource = 1800
         return URLSession(configuration: configuration)
     }
 
     public func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel) async throws -> ASRWorkerResult {
-        let timeout = ASRWorker.timeout(audioSeconds: audioSeconds)
+        // The large model asked for by name is waited for however busy the Neo is (`HubTimeouts.largeModelWait`).
+        let timeout = model == .large ? HubTimeouts.largeModelWait(audioSeconds: audioSeconds)
+                                      : ASRWorker.timeout(audioSeconds: audioSeconds)
         var (data, status) = try await send(wav: wav, hints: hints, model: model, secret: secret.value(), timeout: timeout)
         if status == 401 {
             // The worker made a new secret since we read it (or created it first): read the file again, once.

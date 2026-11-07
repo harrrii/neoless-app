@@ -80,6 +80,44 @@ import Testing
         #expect(hub.service.history.entries.count == 1)
     }
 
+    @Test func aDeviceThatRanOutOfTimeAsksAgainAndGetsTheLargeModelsText() async throws {
+        // 2026-11-06: 7.8 minutes of speech took the large model 91 s on a busy Neo; the Mac gave up at 90 s and
+        // typed its own text. Now it asks again under the same recording id (`HubDictation.waitsLonger`), its
+        // transcript along: the hub waits for the job it is running and answers with the large model's text.
+        let hub = try HubFixture()
+        let gate = Gate()
+        hub.asr.gate = gate
+        hub.asr.reply = .text("大模型听到的话")
+        let request = dictation(local: "本机听到的话").asking(for: .large)
+        let first = Task { try await hub.dictate(request) }
+        _ = await eventually { gate.arrived == 1 }
+        first.cancel()                 // the device's call ended; the hub's job carries on
+        let again = Task { try await hub.post(HubPath.polish, request.polishRequest(text: "本机听到的话")) }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        gate.open()
+        let result = try decode(DictationResult.self, try await again.value)
+        #expect(result.recognizer == .qwen3ASR && result.raw == "大模型听到的话")
+        #expect(hub.asr.calls.count == 1)
+        #expect(hub.service.history.entries.count == 1)
+    }
+
+    @Test func aDeviceThatAskedAgainForAJobThatFailedGetsItsOwnTextPolished() async throws {
+        let hub = try HubFixture()
+        let gate = Gate()
+        hub.asr.gate = gate
+        hub.asr.reply = .fail(.unreachable)
+        let request = dictation(local: "本机听到的话").asking(for: .large)
+        let first = Task { try await hub.dictate(request) }
+        _ = await eventually { gate.arrived == 1 }
+        let again = Task { try await hub.post(HubPath.polish, request.polishRequest(text: "本机听到的话")) }
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        gate.open()
+        let result = try decode(DictationResult.self, try await again.value)
+        #expect(result.recognizer == .local && result.raw == "本机听到的话")
+        _ = try? await first.value
+        #expect(hub.service.history.entries.count == 1)
+    }
+
     @Test func theDeviceWaitsAtLeastAsLongAsTheHubDoes() {
         // The device's budget for a request that waits is built from the hub's own wait for its worker
         // (`ASRWorker.timeout`): the hub's answer, an error included, comes before the device gives up.
@@ -88,6 +126,10 @@ import Testing
         for seconds: Double in [0, 5, 20, 60, 120, 420, 600] {
             #expect(HubTimeouts.standard.dictation(durationSeconds: seconds, audioBytes: 0, patient: true)
                     >= ASRWorker.timeout(audioSeconds: seconds))
+        }
+        // 大模型 asked for by name: the hub waits for its worker at least as long as for any other request.
+        for seconds: Double in [0, 5, 20, 60, 120, 420, 600] {
+            #expect(HubTimeouts.largeModelWait(audioSeconds: seconds) >= ASRWorker.timeout(audioSeconds: seconds))
         }
         // Where someone waits, no call is given more than 90 s: a recording up to about a minute and a half is
         // still covered in full.
