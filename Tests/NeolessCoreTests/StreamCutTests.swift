@@ -67,6 +67,19 @@ import Testing
         #expect(abs(Double(point) / Self.rate - 24.3) < 0.2)
     }
 
+    @Test func theSmallModelsPiecesAreShorter() throws {
+        // 小模型 and 自动: a pause after 10 s is taken, one before is not; no pause by 20 s, cut anyway.
+        let early = Self.recording(seconds: 14, pauses: [(8, 0.6)])
+        #expect(StreamCut.point(in: early, sampleRate: Self.rate, plan: .quick) == nil)
+        let samples = Self.recording(seconds: 14, pauses: [(11, 0.6)])
+        let point = try #require(StreamCut.point(in: samples, sampleRate: Self.rate, plan: .quick))
+        #expect(abs(Double(point) / Self.rate - 11.3) < 0.2)
+        // The same audio is not cut yet for the large model.
+        #expect(StreamCut.point(in: samples, sampleRate: Self.rate) == nil)
+        let noPause = try #require(StreamCut.point(in: Self.recording(seconds: 20.5), sampleRate: Self.rate, plan: .quick))
+        #expect(Double(noPause) / Self.rate >= 10 && Double(noPause) / Self.rate <= 20)
+    }
+
     @Test func piecesJoinAsOneText() {
         #expect(StreamCut.join(["第一段。", "第二段"]) == "第一段。第二段")
         #expect(StreamCut.join(["讲 Fisher", "effect 吧"]) == "讲 Fisher effect 吧")

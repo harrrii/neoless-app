@@ -236,6 +236,8 @@ public final class HubService {
             var decodeMs: Int
             var wav: Data?
             var job: Task<String, Error>
+            /// Its recognition is over (text or failure).
+            var done = false
         }
         var device: String
         var model: HubASRModel
@@ -244,6 +246,15 @@ public final class HubService {
         /// The last job started: the next waits for it, so the worker gets one piece at a time.
         var last: Task<String, Error>?
         var seconds: Double { pieces.values.reduce(0) { $0 + $1.seconds } }
+    }
+
+    /// How long the worker is given for one piece. 大模型: what the longest recording gets
+    /// (`HubTimeouts.largeModelWait`), not what the piece's own length would: the worker takes one recording at a
+    /// time, and on a swamped Neo a piece waits behind another that is stuck (2026-11-07: 393 s for 42.5 s of audio
+    /// while the Neo was building, and the pieces after it 269 s in the queue). Given up on sooner, the text would
+    /// have been this Mac's instead of the large model's, which 大模型 promises it never is.
+    nonisolated static func pieceTimeout(seconds: Double, model: HubASRModel) -> TimeInterval {
+        model == .large ? HubTimeouts.largeModelWait(audioSeconds: AudioPrep.maxSeconds) : ASRWorker.timeout(audioSeconds: seconds)
     }
 
     /// How long a recording sent piece by piece is kept without a new piece or `…/finish`.
@@ -299,7 +310,9 @@ public final class HubService {
         return Task { @MainActor [weak self] in
             _ = try? await previous?.value
             guard seconds > 0, let self else { return "" }
-            let heard = try await asr.recognize(wav: wav, hints: self.words.recognizerHints, audioSeconds: seconds, model: model)
+            defer { self.streams[id]?.pieces[index]?.done = true }
+            let heard = try await asr.recognize(wav: wav, hints: self.words.recognizerHints, audioSeconds: seconds,
+                                                model: model, timeout: Self.pieceTimeout(seconds: seconds, model: model))
             self.streams[id]?.pieces[index]?.wav = nil
             return heard.raw.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -307,7 +320,10 @@ public final class HubService {
 
     /// `POST /v1/streams/{id}/finish`: waits for the pieces' recognition (a piece whose recognition failed is tried
     /// once more), joins their text in order and finishes it as a dictation (`finish`), once per recording like
-    /// `dictate`. 409 `missing_chunks` while pieces are missing; the device sends them and asks again.
+    /// `dictate`. 409 `missing_chunks` while pieces are missing; the device sends them and asks again. With the
+    /// device's own transcript along (小模型, 自动), a busy Neo is waited for as `dictate` waits for it: the
+    /// recognition still to do once the user stopped gets `impatientTimeout` of the audio not yet recognised, and
+    /// past that the device's transcript is polished instead.
     public func finishStream(request: DictationRequest, chunks: Int) async throws -> DictationResult {
         try Self.checkLengths(texts: [request.localTranscript],
                               names: [request.appName, request.bundleID, request.clientVersion])
@@ -327,21 +343,37 @@ public final class HubService {
         streams[id]?.touched = now()
         var texts: [String] = []
         var problem: HubFailure?
-        for index in 0..<chunks {
-            guard let piece = stream.pieces[index] else { continue }
+        let local = request.localTranscript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !local.isEmpty {
+            let left = stream.pieces.values.filter { !$0.done }.reduce(0) { $0 + $1.seconds }
+            let wait = impatientTimeout(left) + (mayBeLoading(at: now()) ? loadAllowance : 0)
+            let jobs = (0..<chunks).compactMap { stream.pieces[$0]?.job }
             do {
-                texts.append(try await piece.job.value)
+                texts = try await Self.texts(of: jobs, within: wait)
             } catch {
-                // Once more, now that the worker may be free again.
+                // Too busy, or a piece failed: the device heard it too (`raw` stays empty, the transcript below).
+                HubLog.write("asr: \(Self.describe(error))（分段，改用设备的文字）")
+                texts = []
+            }
+        } else {
+            for index in 0..<chunks {
+                guard let piece = stream.pieces[index] else { continue }
                 do {
-                    guard let wav = streams[id]?.pieces[index]?.wav else { throw error }
-                    let heard = try await asr.recognize(wav: wav, hints: words.recognizerHints,
-                                                        audioSeconds: piece.seconds, model: stream.model)
-                    texts.append(heard.raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                    texts.append(try await piece.job.value)
                 } catch {
-                    HubLog.write("asr: \(Self.describe(error))（分段 \(index)）")
-                    problem = Self.failure(forASR: error)
-                    break
+                    // Once more, now that the worker may be free again.
+                    do {
+                        guard let wav = streams[id]?.pieces[index]?.wav else { throw error }
+                        let heard = try await asr.recognize(wav: wav, hints: words.recognizerHints,
+                                                            audioSeconds: piece.seconds, model: stream.model,
+                                                            timeout: Self.pieceTimeout(seconds: piece.seconds,
+                                                                                       model: stream.model))
+                        texts.append(heard.raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                    } catch {
+                        HubLog.write("asr: \(Self.describe(error))（分段 \(index)）")
+                        problem = Self.failure(forASR: error)
+                        break
+                    }
                 }
             }
         }
@@ -351,7 +383,6 @@ public final class HubService {
         timings.asrMs = Self.ms(since: start)
         var raw = problem == nil ? StreamCut.join(texts) : ""
         var recognizer = HubRecognizer.qwen3ASR
-        let local = request.localTranscript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if raw.isEmpty, !local.isEmpty {
             raw = local
             recognizer = .local
@@ -365,6 +396,29 @@ public final class HubService {
                                           clientVersion: request.clientVersion, durationSeconds: request.durationSeconds),
                             options: config.polishOptions(model: request.polishModel, fastTier: request.fastTier),
                             timings: timings, start: start)
+    }
+
+    /// The pieces' texts in order, or `ASRFailure.timeout` after `seconds`. Unlike `ASRWorkerClient.deadline` it
+    /// does not wait for what it gives up on: waiting for a task's value cannot be cancelled, and the pieces'
+    /// recognition goes on (another finish of the same recording may still want it).
+    nonisolated static func texts(of jobs: [Task<String, Error>], within seconds: TimeInterval) async throws -> [String] {
+        let answer = OneAnswer<[String]>()
+        return try await withCheckedThrowingContinuation { continuation in
+            answer.set(continuation)
+            Task {
+                do {
+                    var texts: [String] = []
+                    for job in jobs { texts.append(try await job.value) }
+                    answer.give(.success(texts))
+                } catch {
+                    answer.give(.failure(error))
+                }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
+                answer.give(.failure(ASRFailure.timeout))
+            }
+        }
     }
 
     /// `DELETE /v1/streams/{id}`: forgets a recording's pieces (the device sent it whole after all, or cancelled).
@@ -936,5 +990,34 @@ public enum HubLog {
     /// "POST /v1/dictations 200 1234ms iPhone".
     public static func request(method: String, route: String, status: Int, ms: Int, device: String?) {
         write("\(method) \(route) \(status) \(ms)ms \(device ?? "-")")
+    }
+}
+
+/// A continuation resumed by whichever answer comes first; the others are dropped.
+final class OneAnswer<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    /// An answer that came before `set`.
+    private var early: Result<T, Error>?
+    private var answered = false
+
+    func set(_ continuation: CheckedContinuation<T, Error>) {
+        let ready: Result<T, Error>? = lock.withLock {
+            if let early { self.early = nil; return early }
+            self.continuation = continuation
+            return nil
+        }
+        if let ready { continuation.resume(with: ready) }
+    }
+
+    func give(_ result: Result<T, Error>) {
+        let waiting: CheckedContinuation<T, Error>? = lock.withLock {
+            guard !answered else { return nil }
+            answered = true
+            guard let continuation else { early = result; return nil }
+            self.continuation = nil
+            return continuation
+        }
+        waiting?.resume(with: result)
     }
 }

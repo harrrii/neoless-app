@@ -14,6 +14,16 @@ public protocol ASRRecognizing: Sendable {
     /// and so without the route) is no failure of anything else and is only that nil.
     @discardableResult
     func warm(model: HubASRModel) async -> Bool?
+    /// As `recognize`, waiting up to `timeout` instead of what the recording's length gives.
+    func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel,
+                   timeout: TimeInterval) async throws -> ASRWorkerResult
+}
+
+extension ASRRecognizing {
+    public func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel,
+                          timeout: TimeInterval) async throws -> ASRWorkerResult {
+        try await recognize(wav: wav, hints: hints, audioSeconds: audioSeconds, model: model)
+    }
 }
 
 extension ASRRecognizing {
@@ -103,8 +113,13 @@ public struct ASRWorkerClient: ASRRecognizing {
 
     public func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel) async throws -> ASRWorkerResult {
         // The large model asked for by name is waited for however busy the Neo is (`HubTimeouts.largeModelWait`).
-        let timeout = model == .large ? HubTimeouts.largeModelWait(audioSeconds: audioSeconds)
-                                      : ASRWorker.timeout(audioSeconds: audioSeconds)
+        try await recognize(wav: wav, hints: hints, audioSeconds: audioSeconds, model: model,
+                            timeout: model == .large ? HubTimeouts.largeModelWait(audioSeconds: audioSeconds)
+                                                     : ASRWorker.timeout(audioSeconds: audioSeconds))
+    }
+
+    public func recognize(wav: Data, hints: [String], audioSeconds: Double, model: HubASRModel,
+                          timeout: TimeInterval) async throws -> ASRWorkerResult {
         var (data, status) = try await send(wav: wav, hints: hints, model: model, secret: secret.value(), timeout: timeout)
         if status == 401 {
             // The worker made a new secret since we read it (or created it first): read the file again, once.

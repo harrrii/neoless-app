@@ -1,14 +1,32 @@
 import Foundation
 
 /// Where a recording sent piece by piece while the user speaks (边说边传, docs/hub.md) is cut: in a pause, so no
-/// word is split between two pieces and each is recognised on its own as well as the whole would be. A piece is
-/// 20–45 s: long enough that the speech model has context and a recording of ten minutes is about twenty pieces,
-/// short enough that what is left once the user stops is a few seconds of work for the Neo.
+/// word is split between two pieces and each is recognised on its own as well as the whole would be. How long a
+/// piece is depends on the model (`Plan`): long enough that the speech model has context, short enough that what is
+/// left once the user stops is a few seconds of work for the Neo.
 public enum StreamCut {
-    /// No piece shorter than this.
-    public static let minSeconds: Double = 20
-    /// Past this, the piece is cut at its quietest moment even without a pause.
-    public static let maxSeconds: Double = 45
+    /// How long the pieces are.
+    public struct Plan: Equatable, Sendable {
+        /// No piece shorter than this.
+        public var minSeconds: Double
+        /// Past this, the piece is cut at its quietest moment even without a pause.
+        public var maxSeconds: Double
+
+        public init(minSeconds: Double, maxSeconds: Double) {
+            self.minSeconds = minSeconds; self.maxSeconds = maxSeconds
+        }
+
+        /// 大模型: 20–45 s. The large model has a fixed cost of about 2 s a call and gains from context.
+        public static let large = Plan(minSeconds: 20, maxSeconds: 45)
+        /// 小模型 and 自动: 10–20 s. The small model has hardly any fixed cost (0.6 s for 3.8 s of audio, 2 s for
+        /// 27.6 s on the Neo, 2026-11-06), so shorter pieces leave less for it once the user stops; much shorter
+        /// would only add seams.
+        public static let quick = Plan(minSeconds: 10, maxSeconds: 20)
+    }
+
+    /// The large model's (`Plan.large`).
+    public static let minSeconds: Double = Plan.large.minSeconds
+    public static let maxSeconds: Double = Plan.large.maxSeconds
     /// The frames compared, and how many quiet ones in a row make a pause (300 ms).
     public static let frameSeconds: Double = 0.1
     public static let pauseFrames = 3
@@ -16,16 +34,16 @@ public enum StreamCut {
     public static let guardSeconds: Double = 0.3
 
     /// Where to cut `samples`, the audio not sent yet (it starts where the last piece ended): how many of its
-    /// samples make the piece (counted from its start, whatever the slice's indices); nil to wait for more. In the middle of the longest pause after `minSeconds`
-    /// (frames quieter than a quarter of the piece's typical loudness, or than `AudioMath.speechRMS`); with no pause
-    /// by `maxSeconds`, at the quietest frame.
-    public static func point(in samples: ArraySlice<Float>, sampleRate: Double) -> Int? {
+    /// samples make the piece (counted from its start, whatever the slice's indices); nil to wait for more. In the
+    /// middle of the longest pause after `plan.minSeconds` (frames quieter than a quarter of the piece's typical
+    /// loudness, or than `AudioMath.speechRMS`); with no pause by `plan.maxSeconds`, at the quietest frame.
+    public static func point(in samples: ArraySlice<Float>, sampleRate: Double, plan: Plan = .large) -> Int? {
         let frame = max(1, Int(sampleRate * frameSeconds))
         let first = samples.startIndex
         let usable = samples.count - Int(sampleRate * guardSeconds)
-        let start = Int(sampleRate * minSeconds)
+        let start = Int(sampleRate * plan.minSeconds)
         guard usable >= start + frame * pauseFrames else { return nil }
-        let end = min(usable, Int(sampleRate * maxSeconds))
+        let end = min(usable, Int(sampleRate * plan.maxSeconds))
         // Loudness of every frame of the piece, to judge what "quiet" is for this microphone and this room.
         var levels: [Float] = []
         levels.reserveCapacity(end / frame)
@@ -53,13 +71,13 @@ public enum StreamCut {
             run = nil
         }
         if let best { return (best.start * frame) + (best.length * frame) / 2 }
-        guard usable >= Int(sampleRate * maxSeconds) else { return nil }
+        guard usable >= Int(sampleRate * plan.maxSeconds) else { return nil }
         let quietest = (firstFrame..<levels.count).min { levels[$0] < levels[$1] } ?? firstFrame
         return quietest * frame + frame / 2
     }
 
-    public static func point(in samples: [Float], sampleRate: Double) -> Int? {
-        point(in: samples[...], sampleRate: sampleRate)
+    public static func point(in samples: [Float], sampleRate: Double, plan: Plan = .large) -> Int? {
+        point(in: samples[...], sampleRate: sampleRate, plan: plan)
     }
 
     static func rms(_ frame: ArraySlice<Float>) -> Float {

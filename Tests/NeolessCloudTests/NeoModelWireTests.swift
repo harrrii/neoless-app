@@ -118,6 +118,15 @@ import NeolessCore
         }
     }
 
+    @Test func aLargeModelWhoseRecognitionFailedAsksAgain() {
+        // 2026-11-07: the Neo's worker hung; the hub said asr_unavailable and the Mac typed its own text.
+        let unavailable = HubError.server(status: 503, body: HubErrorBody(error: "x", code: HubErrorCode.asrUnavailable, retryable: true))
+        #expect(HubDictation.recognitionFailed(unavailable, request: base().asking(for: .large)))
+        #expect(HubDictation.asksAgain(unavailable, request: base().asking(for: .large)))
+        #expect(!HubDictation.recognitionFailed(unavailable, request: base()))
+        #expect(!HubDictation.asksAgain(unavailable, request: base().asking(for: .small)))
+    }
+
     @Test func aLargeModelRequestThatRanOutOfTimeAsksAgain() {
         // The hub is still at it (a long recording on a busy Neo): ask again rather than type this Mac's text.
         let large = base().asking(for: .large)

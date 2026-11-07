@@ -1833,6 +1833,12 @@ class QwenEngineTests(QuietLogTestCase):
         engine._model, engine._mx = model, self.Cache()
         return engine
 
+    def test_token_cap_grows_with_the_audio_up_to_the_most(self):
+        self.assertEqual(w.token_cap(0), w.ASR_TOKENS_BASE)
+        self.assertEqual(w.token_cap(30), w.ASR_TOKENS_BASE + 30 * w.ASR_TOKENS_PER_SECOND)
+        self.assertEqual(w.token_cap(10_000), w.ASR_MAX_TOKENS)
+        self.assertGreater(w.hung_after(42.5), 200)
+
     def test_hear_is_one_call_with_the_language_and_the_hints(self):
         model = self.Model()
         engine = self.engine(model)
@@ -1842,7 +1848,7 @@ class QwenEngineTests(QuietLogTestCase):
         first, second = model.calls
         self.assertIs(first['audio'], samples)
         self.assertEqual((first['language'], first['hotwords'], first['max_tokens'], first['chunk_duration']),
-                         ('English', ['OpenAI'], w.ASR_MAX_TOKENS, w.ASR_CHUNK_SECONDS))
+                         ('English', ['OpenAI'], w.token_cap(1.0), w.ASR_CHUNK_SECONDS))
         self.assertEqual((second['language'], second['hotwords']), (None, []))
         self.assertEqual(engine._mx.clears, 2)
 

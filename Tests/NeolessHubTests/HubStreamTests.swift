@@ -88,6 +88,35 @@ import Testing
         #expect(polished.recognizer == .local)
     }
 
+    @Test func withTheDevicesTranscriptABusyNeoIsNotWaitedFor() async throws {
+        // 小模型 / 自动: the Mac's transcript comes along at the finish; the Neo still recognising past its short
+        // wait means that transcript is polished instead, as for a recording sent whole.
+        let hub = try HubFixture()
+        let gate = Gate()
+        hub.asr.gate = gate
+        hub.service.impatientTimeout = { _ in 0.2 }
+        let request = dictation(local: "本机听到的整段话").asking(for: .small)
+        #expect(request.localTranscript == "本机听到的整段话")
+        _ = try await hub.chunk(request, 0)
+        _ = try await hub.chunk(request, 1)
+        let result = try decode(DictationResult.self, try await hub.finish(request, chunks: 2))
+        #expect(result.recognizer == .local && result.raw == "本机听到的整段话")
+        gate.open()
+    }
+
+    @Test func withTheDevicesTranscriptANeoThatKeptUpIsUsed() async throws {
+        let hub = try HubFixture()
+        hub.asr.replies = [.text("第一段"), .text("第二段")]
+        hub.service.impatientTimeout = { _ in 0.2 }
+        let request = dictation(local: "本机听到的整段话").asking(for: .small)
+        _ = try await hub.chunk(request, 0)
+        _ = try await hub.chunk(request, 1)
+        #expect(await eventually { hub.asr.calls.count == 2 })
+        let result = try decode(DictationResult.self, try await hub.finish(request, chunks: 2))
+        #expect(result.recognizer == .qwen3ASR && result.raw == "第一段第二段")
+        #expect(hub.asr.calls.allSatisfy { $0.model == .small })
+    }
+
     @Test func aDroppedRecordingIsForgotten() async throws {
         let hub = try HubFixture()
         let request = dictation().asking(for: .large)
@@ -106,6 +135,14 @@ import Testing
         #expect(wrong.status == .badRequest)
         let outOfRange = try await hub.chunk(request, Hub.maxStreamChunks)
         #expect(outOfRange.status == .badRequest)
+    }
+
+    @Test func aLargeModelPieceIsWaitedForAsLongAsTheLongestRecording() {
+        // 2026-11-07: a stuck recognition held a 42.5 s piece for 393 s and the pieces after it in the queue; a
+        // timeout from the piece's own length (about two minutes) turned a 9.5-minute recording into the Mac's text.
+        #expect(HubService.pieceTimeout(seconds: 42.5, model: .large) == HubTimeouts.largeModelWait(audioSeconds: 600))
+        #expect(HubService.pieceTimeout(seconds: 42.5, model: .large) >= 393 + 269)
+        #expect(HubService.pieceTimeout(seconds: 12, model: .small) == ASRWorker.timeout(audioSeconds: 12))
     }
 
     @Test func piecesCountAsDictations() {

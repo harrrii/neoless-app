@@ -99,6 +99,8 @@ final class DictationController: ObservableObject {
     /// A take's recording as it goes to the Neo piece by piece while the user speaks (`startStream`).
     private struct Streaming {
         let sender: HubStreamSender
+        /// How long the pieces are: 大模型's, or 小模型 and 自动's shorter ones.
+        let plan: StreamCut.Plan
         /// Samples already cut into pieces: the next piece starts here.
         var cut = 0
         /// Pieces cut so far.
@@ -148,8 +150,8 @@ final class DictationController: ObservableObject {
     private var hubReachable: [UUID: Bool] = [:]
     /// Why that ping failed, when it says more than "out of reach" (Cloudflare Access stopped it, 双重锁).
     private var hubPingFailures: [UUID: HubError] = [:]
-    /// 边说边传 (识别模型 › 大模型): the pieces of a take already cut and on their way to the Neo while the user
-    /// speaks, by take id (`startStream`).
+    /// 边说边传: the pieces of a take already cut and on their way to the Neo while the user speaks, by take id
+    /// (`startStream`).
     private var streaming: [UUID: Streaming] = [:]
     /// When the Neo is next asked to get its speech model ready (`warmHub`).
     private var warmGate = HubWarmGate()
@@ -629,7 +631,7 @@ final class DictationController: ObservableObject {
                     if hasSpeech || (early ?? turnedDown)?.isEmpty == false {
                         // 边说边传: the pieces sent while the user spoke, and what is left after the last cut.
                         var pieces: StreamedPieces?
-                        if let stream, stream.count > 0, !textFirst, self.hub?.askedModel == .large {
+                        if let stream, stream.count > 0, !textFirst {
                             for add in stream.adds { await add.value }
                             var chunks = stream.count
                             if samples.count > stream.cut {
@@ -1014,7 +1016,8 @@ final class DictationController: ObservableObject {
             return reached
         }
         warmHub(client)
-        if hub?.askedModel == .large, hub?.recognizesHere != true { startStream(client) }
+        // 本机识别 sends this Mac's text, not the recording.
+        if hub?.recognizesHere != true { startStream(client) }
     }
 
     /// The dictation as the Neo is asked for it: the mode and app from when recording started, 识别模型, 整理模型
@@ -1027,9 +1030,10 @@ final class DictationController: ObservableObject {
             .asking(for: hub?.askedModel)
     }
 
-    /// 边说边传 (识别模型 › 大模型): while the user speaks, the recording is cut in pauses every 20–45 s
-    /// (`StreamCut`) and each piece goes to the Neo, which recognises it at once. Once the user stops, only the last
-    /// piece is left for it (`viaHub`). A short recording is never cut and goes whole, as before.
+    /// 边说边传: while the user speaks, the recording is cut in pauses (`StreamCut`: every 20–45 s for 大模型, every
+    /// 10–20 s for 小模型 and 自动) and each piece goes to the Neo, which recognises it at once. Once the user stops,
+    /// only the last piece is left for it (`viaHub`). A short recording is never cut and goes whole, as before. With
+    /// 小模型 and 自动 this Mac's transcript still goes along at the end, so a busy Neo costs accuracy, not time.
     private func startStream(_ client: HubClient) {
         let id = session
         guard streaming[id] == nil, let take else { return }
@@ -1037,7 +1041,7 @@ final class DictationController: ObservableObject {
         let sender = HubStreamSender(send: { audio, index in
             _ = try await client.streamChunk(audio, index: index, request: request)
         }, drop: { await client.dropStream(id) })
-        var stream = Streaming(sender: sender)
+        var stream = Streaming(sender: sender, plan: hub?.askedModel == .large ? .large : .quick)
         stream.ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -1054,9 +1058,9 @@ final class DictationController: ObservableObject {
     /// Cuts the next piece off the recording when it is long enough and has a pause, and sends it.
     private func cutPiece(_ id: UUID, from recorder: AudioRecorder) {
         guard var stream = streaming[id], stream.count + 1 < Hub.maxStreamChunks,
-              recorder.duration - Double(stream.cut) / AudioRecorder.sampleRate > StreamCut.minSeconds else { return }
+              recorder.duration - Double(stream.cut) / AudioRecorder.sampleRate > stream.plan.minSeconds else { return }
         let pending = recorder.samples(from: stream.cut)
-        guard let point = StreamCut.point(in: pending, sampleRate: AudioRecorder.sampleRate) else { return }
+        guard let point = StreamCut.point(in: pending, sampleRate: AudioRecorder.sampleRate, plan: stream.plan) else { return }
         let piece = Array(pending[..<point]), index = stream.count, sender = stream.sender
         stream.cut += point
         stream.count += 1
@@ -1137,7 +1141,8 @@ final class DictationController: ObservableObject {
         func askNeo() async throws -> DictationResult {
             do {
                 return try await ask()
-            } catch let error where HubDictation.waitsLonger(error, request: request) {
+            } catch let error where HubDictation.waitsLonger(error, request: request)
+                        || HubDictation.recognitionFailed(error, request: request) {
                 let patience = HubTimeouts.largeModelPatience(audioSeconds: duration)
                 var last: Error = error
                 while Double(since(began)) / 1000 < patience {
@@ -1145,7 +1150,9 @@ final class DictationController: ObservableObject {
                         return try await ask()
                     } catch let again where HubDictation.asksAgain(again, request: request) {
                         last = again
-                        if (again as? HubError) != .timeout { try await Task.sleep(nanoseconds: 2_000_000_000) }
+                        // A failed recognition: give the Neo's worker a moment to come back first.
+                        let pause: UInt64 = HubDictation.recognitionFailed(again, request: request) ? 5 : 2
+                        if (again as? HubError) != .timeout { try await Task.sleep(nanoseconds: pause * 1_000_000_000) }
                     }
                 }
                 throw last

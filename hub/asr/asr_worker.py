@@ -43,6 +43,7 @@ import secrets  # noqa: E402
 import stat  # noqa: E402
 import sys  # noqa: E402
 import tempfile  # noqa: E402
+import threading  # noqa: E402
 import time  # noqa: E402
 import unicodedata  # noqa: E402
 import wave  # noqa: E402
@@ -84,6 +85,25 @@ MODEL_REVISIONS = {
 }
 MODEL_FILES = ['*.json', '*.safetensors', '*.model', '*.txt', '*.tiktoken']
 ASR_MAX_TOKENS = 8192
+# A model call's tokens grow with its audio: fast speech is about 7 tokens a second. A call that runs
+# on past `token_cap` is stuck repeating itself (2026-11-07: 42 s of audio took 393 s), so it stops there.
+ASR_TOKENS_BASE = 128
+ASR_TOKENS_PER_SECOND = 16
+# One recognition that runs past this has hung (the model looping, or the Mac out of memory): every
+# request behind it would wait as long. The worker exits and launchd starts it again in a moment; the
+# hub tries the recording again.
+HUNG_BASE_SECONDS = 90.0
+HUNG_PER_SECOND = 4.0
+
+
+def token_cap(seconds: float) -> int:
+    """The most tokens one model call over `seconds` of audio may write."""
+    return min(ASR_MAX_TOKENS, ASR_TOKENS_BASE + math.ceil(ASR_TOKENS_PER_SECOND * max(0.0, seconds)))
+
+
+def hung_after(seconds: float) -> float:
+    """How long one recognition of `seconds` of audio may run before the worker gives up on itself."""
+    return HUNG_BASE_SECONDS + HUNG_PER_SECOND * max(0.0, seconds)
 ASR_CHUNK_SECONDS = 30.0       # one model call hears at most about this much at a time (see `chunk_bounds`)
 CHUNK_SEARCH_SECONDS = 5.0     # longer audio is cut at its quietest place this close to every 30 seconds
 CHUNK_WINDOW_SECONDS = 0.1     # "quietest": the tenth of a second with the least energy
@@ -800,7 +820,7 @@ class QwenEngine:
             texts = []
             for start, end in chunk_bounds(samples):
                 audio = samples if (start, end) == (0, len(samples)) else samples[start:end]
-                result = self._model.generate(audio=audio, language=language, max_tokens=ASR_MAX_TOKENS,
+                result = self._model.generate(audio=audio, language=language, max_tokens=token_cap(len(audio) / SAMPLE_RATE),
                                               chunk_duration=max(ASR_CHUNK_SECONDS, len(audio) / SAMPLE_RATE),
                                               verbose=False, hotwords=list(hints))
                 texts.append(result.text.strip())
@@ -1049,17 +1069,27 @@ class Recognizer:
         load_ms = self._load(model)
         samples = resample(samples, rate)  # here, one at a time; not part of asrMs
         asr_started = time.monotonic()
+        watchdog = threading.Timer(hung_after(len(samples) / SAMPLE_RATE), self._hung, (len(samples) / SAMPLE_RATE,))
+        watchdog.daemon = True
+        watchdog.start()
         try:
             heard = self.engine.transcribe(samples, hints, model)
         except Exception as exc:
             log(f'recognition failed: {type(exc).__name__}')
             raise RequestError(500, 'asr_failed', '识别失败，请重试。', retryable=True) from exc
+        finally:
+            watchdog.cancel()
         raw = heard.text.strip()
         if heard.probes:
             log(f'languages: windows={heard.probes} stretches={heard.segments}')
         return {'raw': raw, 'status': 'ok' if raw else 'empty',
                 'asrMs': round((time.monotonic() - asr_started) * 1000), 'loadMs': load_ms,
                 'queueMs': round((started - queued) * 1000), 'model': heard.model, 'segments': heard.segments}
+
+    @staticmethod
+    def _hung(seconds: float) -> None:
+        log(f'hung: one recognition of {seconds:.1f}s ran past {hung_after(seconds):.0f}s; exiting so launchd starts again')
+        os._exit(75)
 
     def _warm(self, choice: str) -> int:
         # On the inference thread, like a recognition: the model is decided here, as `_run` decides

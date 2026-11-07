@@ -298,7 +298,17 @@ public enum HubDictation {
 
     /// Asked again after the first call (`waitsLonger`): a Neo out of reach for a moment is asked once more too.
     public static func asksAgain(_ error: Error, request: DictationRequest) -> Bool {
-        waitsLonger(error, request: request) || (request.waitsForNeo && (error as? HubError) == .unreachable)
+        waitsLonger(error, request: request) || recognitionFailed(error, request: request)
+            || (request.waitsForNeo && (error as? HubError) == .unreachable)
+    }
+
+    /// 大模型: the Neo's recognition failed this time (`asr_unavailable`: its worker hung, was restarted or ran out
+    /// of time). The hub keeps a streamed recording's pieces and tries the failed ones again on the next finish,
+    /// and the worker comes back in seconds, so the device asks again rather than type its own text
+    /// (2026-11-07: a hung worker turned two long large-model recordings into this Mac's text). Only once the
+    /// patience is spent does the transcript follow (`transcriptFollows`).
+    public static func recognitionFailed(_ error: Error, request: DictationRequest) -> Bool {
+        transcriptFollows(error, request: request)
     }
 
     public enum Next: Equatable, Sendable {

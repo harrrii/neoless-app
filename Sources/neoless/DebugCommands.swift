@@ -13,10 +13,11 @@ import SwiftUI
 ///   neoless --snapshot <dir>           renders every page and HUD state to PNG
 ///                                      (NEOLESS_SNAPSHOT_ONLY=home-ready,overview-* renders only those pages)
 ///   neoless --snapshot-hud <dir>       renders only the HUD capsule states
-///   neoless --test-stream <audio> [--fast] [--whole]
+///   neoless --test-stream <audio> [--fast] [--whole] [--small]
 ///                                      边说边传 against a real hub (NEOLESS_PAIR_LINK: a pairing link of a test
 ///                                      device): the file is played as if spoken, cut into pieces as it goes, and
-///                                      the time from "stop" to the text printed; --whole sends it whole instead
+///                                      the time from "stop" to the text printed; --whole sends it whole instead;
+///                                      --small as 小模型 (shorter pieces, the file's text along as this Mac's)
 ///   neoless --check-keys               the page keys (⌘1 … ⌘4, 1 … 4) against the real menu and pages, off screen
 @MainActor
 enum DebugCommands {
@@ -25,7 +26,7 @@ enum DebugCommands {
     }
 
     /// `--test-stream`: one recording through 边说边传 (or whole), as the app sends it with 大模型.
-    static func testStream(path: String, realTime: Bool, whole: Bool) async {
+    static func testStream(path: String, realTime: Bool, whole: Bool, small: Bool = false) async {
         setvbuf(stdout, nil, _IOLBF, 0)
         guard let link = ProcessInfo.processInfo.environment["NEOLESS_PAIR_LINK"], let pairing = try? HubPairing(link: link) else {
             print("需要 NEOLESS_PAIR_LINK（一台测试设备的配对链接）")
@@ -38,10 +39,13 @@ enum DebugCommands {
         let rate = AudioRecorder.sampleRate
         let duration = Double(samples.count) / rate
         let client = HubClient(server: pairing.server, token: pairing.token, access: pairing.access)
+        // 小模型: what this Mac heard goes along, as the app sends it (here a stand-in text).
         let request = DictationRequest(mode: .natural, autoStructured: false, appName: "测试", locale: "zh-CN",
+                                       localTranscript: small ? "（本机识别的文字）" : nil,
                                        durationSeconds: duration, clientRecordingID: UUID(), client: .mac,
-                                       clientVersion: AppVersion.current).asking(for: .large)
-        print(String(format: "录音 %.1f 秒，%@", duration, whole ? "整段上传" : "边说边传"))
+                                       clientVersion: AppVersion.current).asking(for: small ? .small : .large)
+        let plan: StreamCut.Plan = small ? .quick : .large
+        print(String(format: "录音 %.1f 秒，%@，%@", duration, whole ? "整段上传" : "边说边传", small ? "小模型" : "大模型"))
         func ask(_ call: @escaping @Sendable () async throws -> DictationResult) async throws -> DictationResult {
             let began = Date()
             while true {
@@ -71,8 +75,8 @@ enum DebugCommands {
                     heard = min(duration, heard + 1)
                     if realTime { try? await Task.sleep(nanoseconds: 1_000_000_000) }
                     let available = Int(heard * rate)
-                    guard available - cut > Int(StreamCut.minSeconds * rate),
-                          let point = StreamCut.point(in: samples[cut..<available], sampleRate: rate) else { continue }
+                    guard available - cut > Int(plan.minSeconds * rate),
+                          let point = StreamCut.point(in: samples[cut..<available], sampleRate: rate, plan: plan) else { continue }
                     let piece = Array(samples[cut..<(cut + point)]), index = count
                     print(String(format: "  %.0f 秒：切出第 %d 段（%.1f 秒）", heard, index, Double(point) / rate))
                     cut += point
@@ -137,7 +141,8 @@ enum DebugCommands {
             // A polish timeout stops waiting for a token refresh but not the refresh: let it save before exit(0).
             await account.waitForRefresh()
         } else if let i = args.firstIndex(of: "--test-stream"), i + 1 < args.count {
-            await testStream(path: args[i + 1], realTime: !args.contains("--fast"), whole: args.contains("--whole"))
+            await testStream(path: args[i + 1], realTime: !args.contains("--fast"), whole: args.contains("--whole"),
+                             small: args.contains("--small"))
         } else if args.contains("--polish-eval") {
             await polishEval(args)
         } else if args.contains("--test-callback") {
